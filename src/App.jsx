@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, FileText, Check, X, 
@@ -27,7 +27,7 @@ interface QuizResult {
   percentage: number;
 }
 
-// --- INITIAL DATA ---
+// --- DONNÉES PAR DÉFAUT ---
 const DEFAULT_QUESTIONS: Question[] = [
   {
     id: 1,
@@ -55,13 +55,86 @@ const DEFAULT_FLASHCARDS: Flashcard[] = [
   { id: 2, front: "Props", back: "Arguments transmis aux composants React" }
 ];
 
+// --- MOTEUR DE GÉNÉRATION DE QUESTIONNAIRE ---
+function generateQuizFromText(sourceText: string): { questions: Question[]; flashcards: Flashcard[] } {
+  // Découpage par phrases
+  const rawSentences = sourceText
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 20);
+
+  const generatedQuestions: Question[] = [];
+  const generatedFlashcards: Flashcard[] = [];
+
+  rawSentences.forEach((sentence, index) => {
+    // Recherche de structures de type Définition / Concept
+    const match = sentence.match(/(.+?)\s+(est|sont|désigne|représente|permet de|s'explique par)\s+(.+)/i);
+
+    if (match && generatedQuestions.length < 10) {
+      const subject = match[1].replace(/^[-•*]\s*/, '').trim();
+      const definition = match[3].trim();
+
+      // Construction des propositions QCM
+      const options = [
+        definition,
+        `Une méthode alternative non liée à ${subject}.`,
+        `Un concept obsolète dans ce domaine.`,
+        `Une erreur de configuration fréquente.`
+      ].sort(() => Math.random() - 0.5);
+
+      generatedQuestions.push({
+        id: index + 1,
+        question: `Que désigne le terme ou concept « ${subject} » ?`,
+        options: options,
+        correctAnswer: options.indexOf(definition),
+        explanation: sentence
+      });
+
+      generatedFlashcards.push({
+        id: index + 1,
+        front: subject,
+        back: definition
+      });
+    }
+  });
+
+  // Mode secours si le texte manque de mots-clés de définition
+  if (generatedQuestions.length === 0 && rawSentences.length > 0) {
+    rawSentences.slice(0, 5).forEach((sentence, i) => {
+      const options = [
+        sentence,
+        "Cette affirmation est fausse d'après le cours.",
+        "Énoncé non mentionné dans le document source.",
+        "Aucune de ces réponses."
+      ].sort(() => Math.random() - 0.5);
+
+      generatedQuestions.push({
+        id: i + 1,
+        question: `Lequel de ces éléments est extrait directement du texte de cours ?`,
+        options: options,
+        correctAnswer: options.indexOf(sentence),
+        explanation: `Extrait source : "${sentence}"`
+      });
+
+      generatedFlashcards.push({
+        id: i + 1,
+        front: `Point clé n°${i + 1}`,
+        back: sentence
+      });
+    });
+  }
+
+  return { questions: generatedQuestions, flashcards: generatedFlashcards };
+}
+
 export default function StudySnapApp() {
-  // --- STATES ---
+  // --- ÉTATS PRINCIPAUX ---
   const [activeTab, setActiveTab] = useState<'home' | 'quiz' | 'flashcards' | 'history'>('home');
   const [questions, setQuestions] = useState<Question[]>(DEFAULT_QUESTIONS);
   const [flashcards, setFlashcards] = useState<Flashcard[]>(DEFAULT_FLASHCARDS);
+  const [rawInputText, setRawInputText] = useState('');
   
-  // Quiz State
+  // États du Quiz
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [score, setScore] = useState(0);
@@ -69,49 +142,54 @@ export default function StudySnapApp() {
   const [timeLeft, setTimeLeft] = useState<number>(30);
   const [isTimerActive, setIsTimerActive] = useState(false);
 
-  // Flashcards State
+  // États des Flashcards
   const [cardIndex, setCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
 
-  // Upload & App State
+  // Historique et Gestion des erreurs
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [history, setHistory] = useState<QuizResult[]>([]);
 
-  // --- LOCALSTORAGE PERSISTENCE ---
+  // --- PERSISTANCE LOCALSTORAGE ---
   useEffect(() => {
     try {
       const savedHistory = localStorage.getItem('studysnap_history');
       if (savedHistory) setHistory(JSON.parse(savedHistory));
     } catch (e) {
-      console.error("Erreur de chargement depuis LocalStorage:", e);
+      console.error("Erreur de lecture du LocalStorage", e);
     }
   }, []);
 
   const saveHistory = (newResult: QuizResult) => {
-    const updatedHistory = [newResult, ...history];
-    setHistory(updatedHistory);
+    const updated = [newResult, ...history];
+    setHistory(updated);
     try {
-      localStorage.setItem('studysnap_history', JSON.stringify(updatedHistory));
+      localStorage.setItem('studysnap_history', JSON.stringify(updated));
     } catch (e) {
-      console.error("Erreur de sauvegarde dans LocalStorage:", e);
+      console.error("Erreur d'écriture dans le LocalStorage", e);
     }
   };
 
-  // --- TIMER LOGIC ---
+  // --- GESTION DU TIMER ---
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (isTimerActive && timeLeft > 0 && !isQuizFinished && activeTab === 'quiz') {
-      timer = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
-      }, 1000);
+      timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     } else if (timeLeft === 0 && isTimerActive && !isQuizFinished) {
       handleNextQuestion();
     }
     return () => clearInterval(timer);
   }, [isTimerActive, timeLeft, isQuizFinished, activeTab]);
 
-  // --- HANDLERS ---
-  const startQuiz = () => {
+  // --- ACTIONS QUIZ ---
+  const startQuiz = (customQuestions?: Question[], customCards?: Flashcard[]) => {
+    if (customQuestions && customQuestions.length > 0) {
+      setQuestions(customQuestions);
+    }
+    if (customCards && customCards.length > 0) {
+      setFlashcards(customCards);
+    }
+
     setCurrentQuestionIndex(0);
     setScore(0);
     setIsQuizFinished(false);
@@ -142,8 +220,7 @@ export default function StudySnapApp() {
   const finishQuiz = () => {
     setIsQuizFinished(true);
     setIsTimerActive(false);
-    
-    // Safety check against division by zero
+
     const total = questions.length;
     const calcPercentage = total > 0 ? Math.round((score / total) * 100) : 0;
 
@@ -155,46 +232,56 @@ export default function StudySnapApp() {
     });
   };
 
-  // File Upload Handling
+  // --- TRAITEMENT DU TEXTE / FICHIER ---
+  const handleProcessText = (text: string) => {
+    setUploadError(null);
+    if (!text.trim()) {
+      setUploadError("Le contenu saisi ou le fichier est vide.");
+      return;
+    }
+
+    const { questions: newQs, flashcards: newFc } = generateQuizFromText(text);
+
+    if (newQs.length === 0) {
+      setUploadError("Impossible de générer des questions à partir de ce texte. Fournissez des phrases plus complètes.");
+      return;
+    }
+
+    startQuiz(newQs, newFc);
+  };
+
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     setUploadError(null);
 
     if (!file) return;
 
-    if (file.type !== "text/plain" && !file.name.endsWith('.json')) {
-      setUploadError("Veuillez importer un fichier texte (.txt) ou JSON valide.");
-      return;
-    }
-
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const content = e.target?.result as string;
+
         if (file.name.endsWith('.json')) {
           const parsed = JSON.parse(content);
           if (Array.isArray(parsed) && parsed[0]?.question) {
-            setQuestions(parsed);
-            startQuiz();
+            startQuiz(parsed, DEFAULT_FLASHCARDS);
           } else {
-            throw new Error("Format JSON invalide");
+            throw new Error("Format JSON non valide");
           }
         } else {
-          // Fallback parsing simple pour .txt
-          const lines = content.split('\n').filter(l => l.trim() !== '');
-          if (lines.length > 0) {
-            alert("Fichier texte chargé avec succès (simulation de génération).");
-          }
+          // Traitement texte brut
+          setRawInputText(content);
+          handleProcessText(content);
         }
       } catch (err) {
-        setUploadError("Erreur lors de la lecture du fichier. Format non supporté.");
+        setUploadError("Erreur de lecture du fichier. Assurez-vous d'importer un fichier .txt ou .json valide.");
       }
     };
-    reader.onerror = () => setUploadError("Une erreur est survenue lors du chargement du fichier.");
+
+    reader.onerror = () => setUploadError("Erreur lors de l'accès au fichier local.");
     reader.readAsText(file);
   };
 
-  // Calculated percentage with anti-NaN protection
   const finalPercentage = questions.length > 0 ? Math.round((score / questions.length) * 100) : 0;
 
   return (
@@ -227,43 +314,72 @@ export default function StudySnapApp() {
         </nav>
       </header>
 
-      {/* CONTENT AREA */}
+      {/* ZONE DE CONTENU */}
       <main className="max-w-4xl mx-auto p-4 md:p-6">
         
-        {/* TAB 1: HOME & UPLOAD */}
+        {/* TAB 1: ACCUEIL & GÉNÉRATEUR */}
         {activeTab === 'home' && (
           <div className="space-y-6">
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 text-center space-y-4">
-              <h2 className="text-2xl font-bold text-slate-900">Transformez vos cours en Quiz</h2>
-              <p className="text-slate-600 max-w-lg mx-auto">
-                Importez un fichier de cours pour générer instantanément des séries de questions et réviser efficacement.
-              </p>
-              
-              <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/50 rounded-xl p-8 hover:border-indigo-400 transition cursor-pointer relative">
-                <input 
-                  type="file" 
-                  onChange={handleFileUpload} 
-                  accept=".txt,.json"
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
+              <div className="text-center">
+                <h2 className="text-2xl font-bold text-slate-900">Générez votre Questionnaire</h2>
+                <p className="text-slate-600 text-sm mt-1">Collez votre cours ci-dessous ou importez un fichier pour créer automatiquement votre quiz.</p>
+              </div>
+
+              {/* ZONE TEXTE BRUT */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Option A : Coller votre texte de cours</label>
+                <textarea
+                  value={rawInputText}
+                  onChange={(e) => setRawInputText(e.target.value)}
+                  placeholder="Exemple : Le hook useState permet d'ajouter un état local à un composant fonctionnel React. Le hook useEffect s'exécute après le rendu..."
+                  rows={5}
+                  className="w-full p-3 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
-                <Upload className="w-10 h-10 text-indigo-500 mx-auto mb-2" />
-                <p className="text-sm font-semibold text-slate-700">Déposez un fichier texte ou JSON ici</p>
-                <p className="text-xs text-slate-500 mt-1">Formats supportés : .txt, .json</p>
+                <button
+                  onClick={() => handleProcessText(rawInputText)}
+                  disabled={!rawInputText.trim()}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-2.5 rounded-xl transition flex items-center justify-center space-x-2"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Générer le Quiz depuis le texte</span>
+                </button>
+              </div>
+
+              <div className="relative flex py-2 items-center">
+                <div className="flex-grow border-t border-slate-200"></div>
+                <span className="flex-shrink mx-4 text-xs font-semibold text-slate-400 uppercase">OU</span>
+                <div className="flex-grow border-t border-slate-200"></div>
+              </div>
+
+              {/* ZONE FICHIER */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Option B : Charger un fichier (.txt / .json)</label>
+                <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/50 rounded-xl p-6 hover:border-indigo-400 transition cursor-pointer relative text-center">
+                  <input 
+                    type="file" 
+                    onChange={handleFileUpload} 
+                    accept=".txt,.json"
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  <Upload className="w-8 h-8 text-indigo-500 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-slate-700">Cliquez ou déposez un fichier texte ici</p>
+                </div>
               </div>
 
               {uploadError && (
-                <div className="flex items-center justify-center space-x-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm">
-                  <AlertCircle className="w-4 h-4" />
+                <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
                   <span>{uploadError}</span>
                 </div>
               )}
 
-              <div className="pt-4 flex justify-center space-x-4">
+              <div className="pt-2 text-center">
                 <button 
-                  onClick={startQuiz}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-6 py-2.5 rounded-xl shadow-sm transition"
+                  onClick={() => startQuiz()}
+                  className="text-sm text-indigo-600 hover:text-indigo-800 font-medium underline"
                 >
-                  Lancer le Quiz Démo
+                  Ou essayer avec le Quiz de démonstration
                 </button>
               </div>
             </div>
@@ -339,10 +455,10 @@ export default function StudySnapApp() {
                   </div>
                 </div>
               ) : (
-                <p className="text-center text-slate-500">Aucune question disponible.</p>
+                <p className="text-center text-slate-500">Aucune question chargée.</p>
               )
             ) : (
-              /* RESULTS VIEW */
+              /* ÉCRAN DE RÉSULTAT */
               <div className="text-center py-6 space-y-6">
                 <Award className="w-16 h-16 text-indigo-600 mx-auto" />
                 <h2 className="text-2xl font-bold text-slate-800">Quiz Terminé !</h2>
@@ -354,7 +470,7 @@ export default function StudySnapApp() {
 
                 <div className="flex justify-center space-x-4 pt-4">
                   <button
-                    onClick={startQuiz}
+                    onClick={() => startQuiz()}
                     className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-medium flex items-center space-x-2 hover:bg-indigo-700 transition"
                   >
                     <RefreshCw className="w-4 h-4" />
@@ -377,13 +493,12 @@ export default function StudySnapApp() {
           <div className="max-w-md mx-auto space-y-6">
             <div 
               onClick={() => setIsFlipped(!isFlipped)}
-              className="bg-white border border-slate-200 rounded-2xl p-8 h-64 flex flex-col items-center justify-center text-center cursor-pointer shadow-sm hover:shadow-md transition relative transform-gpu"
-              style={{ perspective: 1000 }}
+              className="bg-white border border-slate-200 rounded-2xl p-8 h-64 flex flex-col items-center justify-center text-center cursor-pointer shadow-sm hover:shadow-md transition relative select-none"
             >
               <span className="absolute top-4 right-4 text-xs font-semibold text-slate-400">
-                {isFlipped ? "RÉPONSE" : "QUESTION"}
+                {isFlipped ? "RÉPONSE" : "RECTO"}
               </span>
-              <p className="text-xl font-semibold text-slate-800">
+              <p className="text-lg font-semibold text-slate-800">
                 {isFlipped ? flashcards[cardIndex]?.back : flashcards[cardIndex]?.front}
               </p>
               <p className="text-xs text-slate-400 mt-6">(Cliquer pour retourner)</p>
@@ -411,7 +526,7 @@ export default function StudySnapApp() {
           </div>
         )}
 
-        {/* TAB 4: HISTORY */}
+        {/* TAB 4: HISTORIQUE */}
         {activeTab === 'history' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
             <h2 className="text-xl font-bold text-slate-800 mb-4">Historique des résultats</h2>
