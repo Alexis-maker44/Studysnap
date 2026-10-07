@@ -285,13 +285,15 @@ export default function StudySnapApp() {
             .map(m => m.name.replace(/^models\//, ''));
 
           if (models.length > 0) {
+            // On trie pour prioriser les modèles flash récents.
             const flashModels = models.filter(m => m.includes('flash')).sort((a, b) => {
-              if (a.includes('3.8')) return -1;
-              if (b.includes('3.8')) return 1;
-              if (a.includes('3.5')) return -1;
-              if (b.includes('3.5')) return 1;
+              // Priorité absolue aux modèles 2.0 et 1.5 pour la vision
               if (a.includes('2.0')) return -1;
               if (b.includes('2.0')) return 1;
+              if (a.includes('1.5')) return -1;
+              if (b.includes('1.5')) return 1;
+              if (a.includes('3.8')) return -1;
+              if (b.includes('3.8')) return 1;
               return 0;
             });
 
@@ -315,7 +317,8 @@ export default function StudySnapApp() {
       throw new Error(`Refusé par Google: ${lastGoogleError}`);
     }
     
-    return { modelsList: ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'], apiVersion: 'v1beta' };
+    // Fallback de sécurité robuste avec les modèles Vision éprouvés
+    return { modelsList: ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-3.8-flash'], apiVersion: 'v1beta' };
   };
 
   const handleGenerateQuiz = async () => {
@@ -407,8 +410,11 @@ RÈGLES IMPORTANTES :
               }
             } catch (_) {}
 
-            // Affichage explicite de l'erreur renvoyée par Google au lieu du message générique
-            if (response.status === 400 || response.status === 401 || response.status === 403) {
+            // CORRECTION ICI : Si le modèle refuse l'image (400) ou est surchargé, on passe au suivant au lieu de planter
+            if (response.status === 400 && errorDetail.toLowerCase().includes('modality')) {
+              lastLoopError = `Le modèle ${model} ne gère pas les images. L'application essaie le suivant...`;
+              continue; // On passe silencieusement au modèle suivant dans la liste
+            } else if (response.status === 400 || response.status === 401 || response.status === 403) {
               throw new Error(`Erreur d'accès Google (${response.status}) : ${errorDetail}`);
             } else if (response.status === 413) {
               throw new Error("Les photos sont trop volumineuses. Réduisez le nombre de pages.");
@@ -420,7 +426,7 @@ RÈGLES IMPORTANTES :
           }
 
           apiResponse = await response.json();
-          break; 
+          break; // Succès ! On sort de la boucle.
 
         } catch (error) {
           if (error.message === 'HIGH_DEMAND') {
@@ -1073,7 +1079,6 @@ RÈGLES IMPORTANTES :
                 <AlertCircle className="w-10 h-10 text-rose-500" />
               </div>
               <h2 className="text-xl font-bold text-slate-800">Oups !</h2>
-              {/* C'est ici que l'erreur EXACTE de Google va s'afficher */}
               <p className="text-rose-600 font-mono text-[10px] px-2 bg-rose-50 py-2 rounded-lg text-left break-words max-w-full">
                 {errorMessage}
               </p>
@@ -1113,7 +1118,6 @@ RÈGLES IMPORTANTES :
                     <p className="text-[11px] text-slate-400">Gratuite sur Google AI Studio</p>
                   </div>
                 </div>
-                {/* Nouveau bouton pour effacer la clé défectueuse */}
                 {geminiApiKey && (
                   <button 
                     onClick={clearApiKey}
