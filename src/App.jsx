@@ -24,7 +24,8 @@ import {
   Image as ImageIcon,
   Key,
   HelpCircle,
-  Loader2
+  Loader2,
+  FileText
 } from 'lucide-react';
 
 /**
@@ -68,7 +69,8 @@ const processAndCompressImage = (file) => {
         resolve({
           data: base64Data,
           mimeType: 'image/jpeg',
-          previewUrl: compressedDataUrl
+          previewUrl: compressedDataUrl,
+          name: file.name
         });
       };
       img.onerror = () => reject(new Error("Impossible de charger l'image sélectionnée."));
@@ -76,6 +78,30 @@ const processAndCompressImage = (file) => {
     };
     reader.onerror = () => reject(new Error("Erreur de lecture du fichier photo."));
   });
+};
+
+/**
+ * Traite aussi bien les photos que les documents PDF
+ */
+const processUploadedFile = async (file) => {
+  if (file.type === 'application/pdf') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64Data = event.target.result.split(',')[1];
+        resolve({
+          data: base64Data,
+          mimeType: 'application/pdf',
+          previewUrl: null,
+          isPdf: true,
+          name: file.name
+        });
+      };
+      reader.onerror = () => reject(new Error("Erreur lors de la lecture du fichier PDF."));
+      reader.readAsDataURL(file);
+    });
+  }
+  return processAndCompressImage(file);
 };
 
 const LANGUAGES = [
@@ -132,6 +158,7 @@ export default function StudySnapApp() {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
 
+  const cameraInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -200,16 +227,16 @@ export default function StudySnapApp() {
 
     setIsProcessingPhotos(true);
     try {
-      // Redimensionne et compresse chaque photo avant de l'ajouter
-      const convertedImages = await Promise.all(files.map(f => processAndCompressImage(f)));
-      setCapturedImages(prev => [...prev, ...convertedImages]);
+      // Traite et compresse les images, ou prépare les fichiers PDF
+      const convertedFiles = await Promise.all(files.map(f => processUploadedFile(f)));
+      setCapturedImages(prev => [...prev, ...convertedFiles]);
     } catch (err) {
-      console.error("Erreur lors de l'optimisation des photos :", err);
-      alert("Erreur lors de la capture de l'image. Veuillez réessayer.");
+      console.error("Erreur lors du traitement des fichiers :", err);
+      alert("Erreur lors du traitement du fichier. Veuillez réessayer.");
     } finally {
       setIsProcessingPhotos(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+      if (event.target) {
+        event.target.value = "";
       }
     }
   };
@@ -290,10 +317,60 @@ export default function StudySnapApp() {
     startCourseQuiz(newCourse);
   };
 
+  /**
+   * Détecte dynamiquement le modèle Gemini disponible et compatible avec la clé API fournie.
+   */
+  const discoverWorkingModel = async (cleanKey) => {
+    const apiVersions = ['v1beta', 'v1'];
+    let lastGoogleError = '';
+
+    for (const ver of apiVersions) {
+      try {
+        const listUrl = `https://generativelanguage.googleapis.com/${ver}/models?key=${cleanKey}`;
+        const res = await fetch(listUrl);
+        
+        if (res.ok) {
+          const data = await res.json();
+          const models = (data.models || [])
+            .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+            .map(m => m.name.replace(/^models\//, ''));
+
+          if (models.length > 0) {
+            // Sélectionne en priorité un modèle rapide "flash" disponible
+            const chosen = models.find(m => m.includes('2.5-flash')) ||
+                           models.find(m => m.includes('2.0-flash')) ||
+                           models.find(m => m.includes('flash')) ||
+                           models[0];
+            return { model: chosen, apiVersion: ver };
+          }
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          if (errData?.error?.message) {
+            lastGoogleError = errData.error.message;
+          }
+        }
+      } catch (err) {
+        lastGoogleError = err.message;
+      }
+    }
+
+    // Si la clé API est explicitement rejetée par Google
+    if (lastGoogleError) {
+      if (lastGoogleError.toLowerCase().includes('api key not valid') || lastGoogleError.toLowerCase().includes('invalid')) {
+        throw new Error("Votre clé API n'est pas reconnue par Google. Vérifiez que vous l'avez bien copiée en entier depuis Google AI Studio.");
+      }
+      throw new Error(`Google AI Studio : ${lastGoogleError}`);
+    }
+
+    // Repli par défaut si le listing n'est pas permis
+    return { model: 'gemini-2.0-flash', apiVersion: 'v1beta' };
+  };
+
   const handleGenerateQuiz = async () => {
     if (capturedImages.length === 0) return;
 
-    const apiKey = geminiApiKey.trim();
+    // Nettoie la clé de tout espace invisible ou guillemets accidentels
+    const apiKey = geminiApiKey.trim().replace(/^["']|["']$/g, '');
 
     if (!apiKey) {
       setShowKeyModal(true);
@@ -304,15 +381,18 @@ export default function StudySnapApp() {
     setErrorMessage('');
 
     try {
-      const prompt = `Agis comme un professeur expert. Lis attentivement les pages de notes de cours jointes. Analyse l'ensemble des pages de manière continue pour synthétiser le contenu et génère un quiz de révision pertinent de 5 questions à choix multiples couvrant les notions clés.
+      // 1. Découverte automatique du modèle supporté par votre compte
+      const { model: activeModel, apiVersion } = await discoverWorkingModel(apiKey);
+
+      const prompt = `Agis comme un professeur expert. Lis attentivement les notes de cours et documents joints. Analyse l'ensemble des pages et fichiers de manière continue pour synthétiser le contenu et génère un quiz de révision pertinent de 5 questions à choix multiples couvrant les notions clés.
 RÈGLES IMPORTANTES :
 1. Rédige TOUTES les questions, propositions et textes INTÉGRALEMENT en ${selectedLanguage}.
 2. Propose exactement 4 options distinctes par question.
 3. Le champ 'correctAnswer' doit être STRICTEMENT identique à l'une des 4 options de 'options'.
 4. Déduis un titre de cours court et pertinent (4 mots maximum) résumant le sujet dans 'courseTitle'.
-5. Si les photos sont illisibles ou floues, génère un quiz pédagogique de 5 questions sur le sujet général sélectionné (${getSubjectObj(selectedSubject).name}).`;
+5. Si les documents sont illisibles, génère un quiz pédagogique de 5 questions sur le sujet général sélectionné (${getSubjectObj(selectedSubject).name}).`;
 
-      const imageParts = capturedImages.map(img => ({
+      const mediaParts = capturedImages.map(img => ({
         inlineData: {
           mimeType: img.mimeType,
           data: img.data
@@ -325,7 +405,7 @@ RÈGLES IMPORTANTES :
             role: "user",
             parts: [
               { text: prompt },
-              ...imageParts
+              ...mediaParts
             ]
           }
         ],
@@ -356,41 +436,12 @@ RÈGLES IMPORTANTES :
         }
       };
 
-      // Liste ordonnée des modèles supportés sur Google AI Studio
-      const candidateModels = [
-        'gemini-2.0-flash',
-        'gemini-1.5-flash',
-        'gemini-2.5-flash'
-      ];
-
-      let response = null;
-      let lastErrorMessage = '';
-
-      for (const model of candidateModels) {
-        try {
-          const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-          const res = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-
-          // Si le modèle n'existe pas sur ce compte (404), on passe immédiatement au suivant
-          if (res.status === 404) {
-            console.warn(`Le modèle ${model} n'a pas été trouvé (404), tentative avec le modèle suivant...`);
-            continue;
-          }
-
-          response = res;
-          break;
-        } catch (fetchErr) {
-          lastErrorMessage = fetchErr.message;
-        }
-      }
-
-      if (!response) {
-        throw new Error(lastErrorMessage || "Aucun des modèles Gemini n'a pu répondre. Vérifiez votre connexion Internet.");
-      }
+      const apiUrl = `https://generativelanguage.googleapis.com/${apiVersion}/models/${activeModel}:generateContent?key=${apiKey}`;
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
       if (!response.ok) {
         let errorDetail = `Erreur ${response.status}`;
@@ -401,22 +452,24 @@ RÈGLES IMPORTANTES :
           }
         } catch (_) {}
 
-        if (response.status === 401 || response.status === 403) {
-          throw new Error("Clé API invalide ou expirée. Vérifiez que vous avez bien copié toute la clé (commençant par AIzaSy...).");
+        if (response.status === 400 || response.status === 401 || response.status === 403) {
+          throw new Error("Clé API invalide ou non autorisée. Allez sur aistudio.google.com pour vérifier votre clé.");
         } else if (response.status === 429) {
-          throw new Error("Quota gratuit temporairement atteint. Patientez 30 secondes avant de relancer.");
+          throw new Error("Quota temporairement atteint. Patientez 30 secondes avant de relancer.");
         } else if (response.status === 413) {
-          throw new Error("Photos trop lourdes. Prenez moins de pages à la fois.");
+          throw new Error("Les photos sont trop volumineuses. Réduisez le nombre de pages.");
         } else {
-          throw new Error(`Google AI : ${errorDetail}`);
+          throw new Error(`Google AI (${activeModel}) : ${errorDetail}`);
         }
       }
 
       const result = await response.json();
 
       if (result.candidates && result.candidates.length > 0 && result.candidates[0].content) {
-        const jsonText = result.candidates[0].content.parts[0].text;
-        const parsed = JSON.parse(jsonText);
+        const rawPart = result.candidates[0].content.parts[0].text;
+        // Nettoyage au cas où le JSON est encapsulé dans des balises markdown ```json
+        const jsonCleaned = rawPart.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+        const parsed = JSON.parse(jsonCleaned);
 
         if (parsed.questions && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
           const newCourse = {
@@ -740,7 +793,7 @@ RÈGLES IMPORTANTES :
         <div className="flex items-center justify-between text-slate-600 font-bold text-xs">
           <div className="flex items-center gap-1.5">
             <ImageIcon className="w-3.5 h-3.5 text-violet-500" />
-            <span>Pages capturées ({capturedImages.length})</span>
+            <span>Fichiers & pages ({capturedImages.length})</span>
           </div>
           {capturedImages.length > 0 && (
             <button 
@@ -755,23 +808,33 @@ RÈGLES IMPORTANTES :
         {isProcessingPhotos ? (
           <div className="flex items-center justify-center p-6 text-violet-600 gap-2 text-xs font-semibold">
             <Loader2 className="w-5 h-5 animate-spin" />
-            <span>Optimisation de la photo pour mobile...</span>
+            <span>Préparation du fichier...</span>
           </div>
         ) : capturedImages.length === 0 ? (
           <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center text-slate-400 text-xs">
-            Aucune photo ajoutée pour l'instant. Prenez vos pages en photo ci-dessous.
+            Aucun document ou photo pour l'instant. Choisissez une option ci-dessous.
           </div>
         ) : (
           <div className="flex gap-2 overflow-x-auto pb-1 pt-1 no-scrollbar">
             {capturedImages.map((img, idx) => (
               <div key={idx} className="relative flex-shrink-0 group">
-                <img 
-                  src={img.previewUrl} 
-                  alt={`Page ${idx + 1}`} 
-                  className="w-20 h-24 object-cover rounded-xl border border-slate-200 shadow-sm"
-                />
+                {img.isPdf ? (
+                  <div className="w-20 h-24 rounded-xl border border-red-200 bg-red-50 p-2 flex flex-col items-center justify-center text-center shadow-sm">
+                    <FileText className="w-7 h-7 text-red-500 mb-1" />
+                    <span className="text-[9px] font-bold text-red-700 truncate w-full px-1">
+                      {img.name || 'Cours.pdf'}
+                    </span>
+                    <span className="text-[8px] font-extrabold text-red-400 uppercase mt-0.5">PDF</span>
+                  </div>
+                ) : (
+                  <img 
+                    src={img.previewUrl} 
+                    alt={`Page ${idx + 1}`} 
+                    className="w-20 h-24 object-cover rounded-xl border border-slate-200 shadow-sm"
+                  />
+                )}
                 <span className="absolute bottom-1 left-1 bg-slate-900/80 text-white font-bold text-[9px] px-1.5 py-0.5 rounded-md backdrop-blur-xs">
-                  Page {idx + 1}
+                  {img.isPdf ? 'Doc' : `Page ${idx + 1}`}
                 </span>
                 <button
                   onClick={() => handleRemoveImage(idx)}
@@ -867,24 +930,45 @@ RÈGLES IMPORTANTES :
 
       {/* Action Buttons */}
       <div className="w-full mt-2 mb-1 flex flex-col gap-2">
+        {/* Input pour la Caméra en direct */}
         <input 
           type="file" 
           accept="image/*" 
           capture="environment" 
+          className="hidden" 
+          ref={cameraInputRef}
+          onChange={handleImageSelection}
+        />
+
+        {/* Input pour Fichiers & Galerie */}
+        <input 
+          type="file" 
+          accept="image/*,application/pdf" 
           multiple
           className="hidden" 
           ref={fileInputRef}
           onChange={handleImageSelection}
         />
         
-        <button 
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isProcessingPhotos}
-          className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white font-bold text-sm py-3 px-4 rounded-xl shadow-sm hover:bg-slate-700 transition-all disabled:opacity-50"
-        >
-          <Camera className="w-4 h-4" />
-          <span>{capturedImages.length > 0 ? "Ajouter une autre photo" : "Prendre une photo"}</span>
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button 
+            onClick={() => cameraInputRef.current?.click()}
+            disabled={isProcessingPhotos}
+            className="flex items-center justify-center gap-2 bg-slate-800 text-white font-bold text-xs py-3 px-3 rounded-xl shadow-sm hover:bg-slate-700 transition-all disabled:opacity-50"
+          >
+            <Camera className="w-4 h-4 text-violet-400" />
+            <span>Prendre photo</span>
+          </button>
+
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isProcessingPhotos}
+            className="flex items-center justify-center gap-2 bg-white text-slate-700 border-2 border-slate-200 font-bold text-xs py-3 px-3 rounded-xl shadow-sm hover:bg-slate-50 transition-all disabled:opacity-50"
+          >
+            <Upload className="w-4 h-4 text-violet-500" />
+            <span>Fichier / Galerie</span>
+          </button>
+        </div>
 
         <button 
           onClick={handleGenerateQuiz}
@@ -896,7 +980,7 @@ RÈGLES IMPORTANTES :
           }`}
         >
           <Sparkles className="w-5 h-5" />
-          <span>Générer le Quiz ({capturedImages.length} page{capturedImages.length > 1 ? 's' : ''})</span>
+          <span>Générer le Quiz ({capturedImages.length} document{capturedImages.length > 1 ? 's' : ''})</span>
         </button>
 
         {capturedImages.length > 0 && (
