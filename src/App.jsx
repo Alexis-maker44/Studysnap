@@ -356,14 +356,41 @@ RÈGLES IMPORTANTES :
         }
       };
 
-      // Modèle Flash optimisé avec gestion de repli
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      // Liste ordonnée des modèles supportés sur Google AI Studio
+      const candidateModels = [
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
+        'gemini-2.5-flash'
+      ];
 
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      let response = null;
+      let lastErrorMessage = '';
+
+      for (const model of candidateModels) {
+        try {
+          const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+          const res = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          // Si le modèle n'existe pas sur ce compte (404), on passe immédiatement au suivant
+          if (res.status === 404) {
+            console.warn(`Le modèle ${model} n'a pas été trouvé (404), tentative avec le modèle suivant...`);
+            continue;
+          }
+
+          response = res;
+          break;
+        } catch (fetchErr) {
+          lastErrorMessage = fetchErr.message;
+        }
+      }
+
+      if (!response) {
+        throw new Error(lastErrorMessage || "Aucun des modèles Gemini n'a pu répondre. Vérifiez votre connexion Internet.");
+      }
 
       if (!response.ok) {
         let errorDetail = `Erreur ${response.status}`;
@@ -375,13 +402,13 @@ RÈGLES IMPORTANTES :
         } catch (_) {}
 
         if (response.status === 401 || response.status === 403) {
-          throw new Error("Clé API invalide ou non autorisée. Vérifiez votre clé Google AI Studio.");
-        } else if (response.status === 404) {
-          throw new Error("Modèle temporairement indisponible. Vérifiez votre connexion.");
+          throw new Error("Clé API invalide ou expirée. Vérifiez que vous avez bien copié toute la clé (commençant par AIzaSy...).");
+        } else if (response.status === 429) {
+          throw new Error("Quota gratuit temporairement atteint. Patientez 30 secondes avant de relancer.");
         } else if (response.status === 413) {
-          throw new Error("Photos trop lourdes pour le réseau. Réessayez avec moins de pages.");
+          throw new Error("Photos trop lourdes. Prenez moins de pages à la fois.");
         } else {
-          throw new Error(`Détail : ${errorDetail}`);
+          throw new Error(`Google AI : ${errorDetail}`);
         }
       }
 
