@@ -21,24 +21,60 @@ import {
   Tag,
   FolderPlus,
   Layers,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Key,
+  HelpCircle,
+  Loader2
 } from 'lucide-react';
 
-// Helper to convert a File object to base64 object with mimeType
-const fileToBase64 = (file) => {
+/**
+ * Redimensionne et compresse l'image pour le web mobile.
+ * Résout le problème des photos trop lourdes de l'iPhone (12-48MP)
+ * et convertit automatiquement le format HEIC/PNG en JPEG propre et léger (~300Ko).
+ */
+const processAndCompressImage = (file) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
-    reader.onload = () => {
-      const resultStr = reader.result;
-      const base64String = resultStr.split(',')[1];
-      resolve({
-        data: base64String,
-        mimeType: file.type || 'image/jpeg',
-        previewUrl: resultStr
-      });
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_DIM = 1600; // Résolution idéale pour l'OCR sans surcharger la mémoire
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_DIM) {
+            height = Math.round((height * MAX_DIM) / width);
+            width = MAX_DIM;
+          }
+        } else {
+          if (height > MAX_DIM) {
+            width = Math.round((width * MAX_DIM) / height);
+            height = MAX_DIM;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Compression en JPEG qualité 80% (très net pour du texte, ~200-350 Ko)
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        const base64Data = compressedDataUrl.split(',')[1];
+
+        resolve({
+          data: base64Data,
+          mimeType: 'image/jpeg',
+          previewUrl: compressedDataUrl
+        });
+      };
+      img.onerror = () => reject(new Error("Impossible de charger l'image sélectionnée."));
+      img.src = event.target.result;
     };
-    reader.onerror = (error) => reject(error);
+    reader.onerror = () => reject(new Error("Erreur de lecture du fichier photo."));
   });
 };
 
@@ -62,22 +98,21 @@ const DEFAULT_SUBJECTS = [
 ];
 
 export default function StudySnapApp() {
-  // Application State navigation: 'library', 'create', 'loading', 'quiz', 'result', 'error'
   const [appState, setAppState] = useState('library');
   const [selectedLanguage, setSelectedLanguage] = useState('French');
   const [selectedSubject, setSelectedSubject] = useState('autre');
-  const [activeTabSubject, setActiveTabSubject] = useState('ALL'); // 'ALL' or subject.id
+  const [activeTabSubject, setActiveTabSubject] = useState('ALL');
   
   const [subjects, setSubjects] = useState(DEFAULT_SUBJECTS);
   const [courses, setCourses] = useState([]);
   const [activeCourseId, setActiveCourseId] = useState(null);
   
-  // Custom new subject state in creation view
   const [customSubjectName, setCustomSubjectName] = useState('');
   const [showCustomSubjectInput, setShowCustomSubjectInput] = useState(false);
 
-  // Multi-photo state
+  // Multi-photo state & optimisation
   const [capturedImages, setCapturedImages] = useState([]);
+  const [isProcessingPhotos, setIsProcessingPhotos] = useState(false);
 
   // Quiz active state
   const [currentQuizData, setCurrentQuizData] = useState([]);
@@ -93,9 +128,12 @@ export default function StudySnapApp() {
   const [editSubjectInput, setEditSubjectInput] = useState('autre');
   const [searchQuery, setSearchQuery] = useState('');
 
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+
   const fileInputRef = useRef(null);
 
-  // Load saved data on startup
   useEffect(() => {
     try {
       const savedCourses = localStorage.getItem('studysnap_courses');
@@ -106,12 +144,23 @@ export default function StudySnapApp() {
       if (savedSubjects) {
         setSubjects(JSON.parse(savedSubjects));
       }
+      const savedKey = localStorage.getItem('gemini_api_key');
+      if (savedKey) {
+        setGeminiApiKey(savedKey);
+        setApiKeyInput(savedKey);
+      }
     } catch (e) {
       console.error("Failed to load saved data:", e);
     }
   }, []);
 
-  // Save courses
+  const saveApiKey = (key) => {
+    const trimmed = key.trim();
+    setGeminiApiKey(trimmed);
+    localStorage.setItem('gemini_api_key', trimmed);
+    setShowKeyModal(false);
+  };
+
   const saveCoursesToStorage = (updatedCourses) => {
     setCourses(updatedCourses);
     try {
@@ -121,7 +170,6 @@ export default function StudySnapApp() {
     }
   };
 
-  // Save subjects
   const saveSubjectsToStorage = (updatedSubjects) => {
     setSubjects(updatedSubjects);
     try {
@@ -150,15 +198,19 @@ export default function StudySnapApp() {
     const files = Array.from(event.target.files || []);
     if (files.length === 0) return;
 
+    setIsProcessingPhotos(true);
     try {
-      const convertedImages = await Promise.all(files.map(f => fileToBase64(f)));
+      // Redimensionne et compresse chaque photo avant de l'ajouter
+      const convertedImages = await Promise.all(files.map(f => processAndCompressImage(f)));
       setCapturedImages(prev => [...prev, ...convertedImages]);
     } catch (err) {
-      console.error("Error loading images:", err);
-    }
-    // Reset file input so user can add the same image again if needed
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+      console.error("Erreur lors de l'optimisation des photos :", err);
+      alert("Erreur lors de la capture de l'image. Veuillez réessayer.");
+    } finally {
+      setIsProcessingPhotos(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   };
 
@@ -166,22 +218,100 @@ export default function StudySnapApp() {
     setCapturedImages(prev => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
+  const generateDemoQuiz = () => {
+    const subObj = getSubjectObj(selectedSubject);
+    const demoQuestions = [
+      {
+        question: `[Mode Démo] Quelle est la méthode clé pour mémoriser vos cours de ${subObj.name} ?`,
+        options: [
+          "Se tester régulièrement avec des quiz espacés",
+          "Relire son cours une seule fois avant l'examen",
+          "Recopier mot à mot sans chercher à comprendre",
+          "Ne réviser que le matin du contrôle"
+        ],
+        correctAnswer: "Se tester régulièrement avec des quiz espacés"
+      },
+      {
+        question: "Pourquoi est-il efficace de résumer un cours avec ses propres mots ?",
+        options: [
+          "Cela force le cerveau à assimiler activement le sens",
+          "Pour réduire le nombre de feuilles dans son classeur",
+          "Parce que le professeur l'exige systématiquement",
+          "Cela évite d'avoir à faire des exercices"
+        ],
+        correctAnswer: "Cela force le cerveau à assimiler activement le sens"
+      },
+      {
+        question: "Lors d'un contrôle, quelle est la première étape indispensable ?",
+        options: [
+          "Lire l'ensemble du sujet et repérer les questions faciles",
+          "Commencer à écrire immédiatement sans réfléchir",
+          "Rendre sa feuille le premier",
+          "Ignorer les consignes spécifiques"
+        ],
+        correctAnswer: "Lire l'ensemble du sujet et repérer les questions faciles"
+      },
+      {
+        question: "Comment organiser au mieux une fiche de révision ?",
+        options: [
+          "Faire apparaître clairement les définitions et formules clés",
+          "Écrire le plus petit possible sans saut de ligne",
+          "Mélanger les chapitres sans aucun titre",
+          "Ne mettre aucun schéma ni exemple"
+        ],
+        correctAnswer: "Faire apparaître clairement les définitions et formules clés"
+      },
+      {
+        question: "Que faire face à une notion difficile ou mal comprise ?",
+        options: [
+          "Poser une question ou chercher un exemple concret",
+          "L'ignorer en espérant qu'elle ne tombe pas au contrôle",
+          "Arrêter de travailler la matière",
+          "Apprendre par cœur sans comprendre"
+        ],
+        correctAnswer: "Poser une question ou chercher un exemple concret"
+      }
+    ];
+
+    const newCourse = {
+      id: Date.now().toString(),
+      title: `Cours ${subObj.name} (Démo)`,
+      createdAt: new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }),
+      language: selectedLanguage,
+      subjectId: selectedSubject,
+      questions: demoQuestions,
+      pageCount: capturedImages.length || 1,
+      bestScore: null
+    };
+
+    const updated = [newCourse, ...courses];
+    saveCoursesToStorage(updated);
+    setCapturedImages([]);
+    startCourseQuiz(newCourse);
+  };
+
   const handleGenerateQuiz = async () => {
     if (capturedImages.length === 0) return;
+
+    const apiKey = geminiApiKey.trim();
+
+    if (!apiKey) {
+      setShowKeyModal(true);
+      return;
+    }
 
     setAppState('loading');
     setErrorMessage('');
 
     try {
-      const prompt = `Act as an expert teacher. Read all the attached study note pages/images provided together. Analyze all pages continuously to synthesize the full material and generate a comprehensive 5-question multiple-choice quiz covering key concepts across all pages. 
-      IMPORTANT RULES:
-      1. Generate ALL questions, options, and text ENTIRELY in ${selectedLanguage}.
-      2. Provide exactly 4 distinct options per question.
-      3. Make sure 'correctAnswer' perfectly matches one of the 'options'.
-      4. Derive a short, relevant course title (maximum 4 words) synthesizing the topic across all pages and set it in 'courseTitle'.
-      5. If no notes are detected, create a 5-question general study quiz in ${selectedLanguage} and set 'courseTitle' to 'Quiz Général'.`;
+      const prompt = `Agis comme un professeur expert. Lis attentivement les pages de notes de cours jointes. Analyse l'ensemble des pages de manière continue pour synthétiser le contenu et génère un quiz de révision pertinent de 5 questions à choix multiples couvrant les notions clés.
+RÈGLES IMPORTANTES :
+1. Rédige TOUTES les questions, propositions et textes INTÉGRALEMENT en ${selectedLanguage}.
+2. Propose exactement 4 options distinctes par question.
+3. Le champ 'correctAnswer' doit être STRICTEMENT identique à l'une des 4 options de 'options'.
+4. Déduis un titre de cours court et pertinent (4 mots maximum) résumant le sujet dans 'courseTitle'.
+5. Si les photos sont illisibles ou floues, génère un quiz pédagogique de 5 questions sur le sujet général sélectionné (${getSubjectObj(selectedSubject).name}).`;
 
-      // Build inlineData objects for all captured images
       const imageParts = capturedImages.map(img => ({
         inlineData: {
           mimeType: img.mimeType,
@@ -226,8 +356,8 @@ export default function StudySnapApp() {
         }
       };
 
-      const apiKey = ""; // Injected by engine at runtime
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+      // Modèle Flash optimisé avec gestion de repli
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -236,7 +366,23 @@ export default function StudySnapApp() {
       });
 
       if (!response.ok) {
-        throw new Error(`API Request failed with status ${response.status}`);
+        let errorDetail = `Erreur ${response.status}`;
+        try {
+          const errData = await response.json();
+          if (errData?.error?.message) {
+            errorDetail = errData.error.message;
+          }
+        } catch (_) {}
+
+        if (response.status === 401 || response.status === 403) {
+          throw new Error("Clé API invalide ou non autorisée. Vérifiez votre clé Google AI Studio.");
+        } else if (response.status === 404) {
+          throw new Error("Modèle temporairement indisponible. Vérifiez votre connexion.");
+        } else if (response.status === 413) {
+          throw new Error("Photos trop lourdes pour le réseau. Réessayez avec moins de pages.");
+        } else {
+          throw new Error(`Détail : ${errorDetail}`);
+        }
       }
 
       const result = await response.json();
@@ -260,19 +406,18 @@ export default function StudySnapApp() {
           const updated = [newCourse, ...courses];
           saveCoursesToStorage(updated);
           
-          // Clear captured images after success
           setCapturedImages([]);
           startCourseQuiz(newCourse);
         } else {
-          throw new Error("Format de données invalide reçu.");
+          throw new Error("Le format du quiz renvoyé n'a pas pu être interprété.");
         }
       } else {
-        throw new Error("Aucun contenu généré.");
+        throw new Error("Aucune réponse générée par l'IA.");
       }
 
     } catch (error) {
       console.error("Error generating quiz:", error);
-      setErrorMessage("Impossible d'analyser ces images. Assurez-vous qu'elles contiennent du texte lisible.");
+      setErrorMessage(error.message || "Impossible d'analyser ces images pour le moment.");
       setAppState('error');
     }
   };
@@ -307,7 +452,6 @@ export default function StudySnapApp() {
         setSelectedAnswer(null);
         setIsCorrect(null);
       } else {
-        // Update best score
         if (activeCourseId) {
           const updatedCourses = courses.map(c => {
             if (c.id === activeCourseId) {
@@ -367,16 +511,19 @@ export default function StudySnapApp() {
             {courses.length} {courses.length > 1 ? 'cours enregistrés' : 'cours enregistré'}
           </p>
         </div>
-        <button 
-          onClick={() => {
-            setCapturedImages([]);
-            setAppState('create');
-          }}
-          className="flex items-center gap-1.5 bg-violet-500 hover:bg-violet-600 text-white font-bold text-sm py-2 px-3.5 rounded-xl shadow-[0_3px_0_0_#7c3aed] active:shadow-none active:translate-y-[3px] transition-all"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Scanner</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowKeyModal(true)}
+            title="Configurer la clé API Gemini"
+            className={`p-2.5 rounded-xl border transition-all ${
+              geminiApiKey 
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100' 
+                : 'border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100 animate-pulse'
+            }`}
+          >
+            <Key className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Search Bar */}
@@ -483,7 +630,6 @@ export default function StudySnapApp() {
                     </div>
                   </div>
 
-                  {/* Actions */}
                   <div className="flex items-center gap-1">
                     <button 
                       onClick={(e) => openEditModal(course, e)}
@@ -517,6 +663,22 @@ export default function StudySnapApp() {
           })
         )}
       </div>
+
+      {/* Bouton unique d'ajout de cours */}
+      {courses.length > 0 && (
+        <div className="pt-2 mt-auto sticky bottom-0 bg-gradient-to-t from-[#f8fafc] via-[#f8fafc]/95 to-transparent pb-1">
+          <button 
+            onClick={() => {
+              setCapturedImages([]);
+              setAppState('create');
+            }}
+            className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm py-3 px-4 rounded-xl shadow-[0_3px_0_0_#6d28d9] active:translate-y-[2px] transition-all"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Ajouter un cours</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 
@@ -541,7 +703,7 @@ export default function StudySnapApp() {
         <div>
           <h2 className="text-xl font-extrabold text-slate-800">Scanner vos documents</h2>
           <p className="text-slate-500 text-xs max-w-xs mx-auto mt-0.5">
-            Prenez une ou plusieurs photos de vos pages de cours !
+            Prenez vos pages en photo (l'application optimise automatiquement la taille).
           </p>
         </div>
       </div>
@@ -563,7 +725,12 @@ export default function StudySnapApp() {
           )}
         </div>
 
-        {capturedImages.length === 0 ? (
+        {isProcessingPhotos ? (
+          <div className="flex items-center justify-center p-6 text-violet-600 gap-2 text-xs font-semibold">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span>Optimisation de la photo pour mobile...</span>
+          </div>
+        ) : capturedImages.length === 0 ? (
           <div className="border-2 border-dashed border-slate-200 rounded-xl p-4 text-center text-slate-400 text-xs">
             Aucune photo ajoutée pour l'instant. Prenez vos pages en photo ci-dessous.
           </div>
@@ -685,7 +852,8 @@ export default function StudySnapApp() {
         
         <button 
           onClick={() => fileInputRef.current?.click()}
-          className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white font-bold text-sm py-3 px-4 rounded-xl shadow-sm hover:bg-slate-700 transition-all"
+          disabled={isProcessingPhotos}
+          className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white font-bold text-sm py-3 px-4 rounded-xl shadow-sm hover:bg-slate-700 transition-all disabled:opacity-50"
         >
           <Camera className="w-4 h-4" />
           <span>{capturedImages.length > 0 ? "Ajouter une autre photo" : "Prendre une photo"}</span>
@@ -693,9 +861,9 @@ export default function StudySnapApp() {
 
         <button 
           onClick={handleGenerateQuiz}
-          disabled={capturedImages.length === 0}
+          disabled={capturedImages.length === 0 || isProcessingPhotos}
           className={`w-full flex items-center justify-center gap-2 font-bold text-base py-3 px-6 rounded-2xl transition-all ${
-            capturedImages.length > 0
+            capturedImages.length > 0 && !isProcessingPhotos
               ? 'bg-violet-500 text-white shadow-[0_4px_0_0_#7c3aed] active:shadow-none active:translate-y-[4px]'
               : 'bg-slate-200 text-slate-400 cursor-not-allowed'
           }`}
@@ -703,6 +871,15 @@ export default function StudySnapApp() {
           <Sparkles className="w-5 h-5" />
           <span>Générer le Quiz ({capturedImages.length} page{capturedImages.length > 1 ? 's' : ''})</span>
         </button>
+
+        {capturedImages.length > 0 && (
+          <button
+            onClick={generateDemoQuiz}
+            className="text-xs text-slate-500 hover:text-violet-600 underline font-medium text-center py-1"
+          >
+            Ou essayer immédiatement en Mode Démo (sans clé API)
+          </button>
+        )}
       </div>
     </div>
   );
@@ -733,7 +910,6 @@ export default function StudySnapApp() {
 
     return (
       <div className="flex flex-col h-full animate-in slide-in-from-right duration-300">
-        {/* Header & Progress */}
         <div className="mb-4 space-y-3">
           <div className="flex justify-between items-center text-xs font-bold text-slate-500">
             <button 
@@ -755,14 +931,12 @@ export default function StudySnapApp() {
           </div>
         </div>
 
-        {/* Question Card */}
         <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-100 p-5 mb-4">
           <h2 className="text-lg md:text-xl font-bold text-slate-800 leading-snug">
             {question.question}
           </h2>
         </div>
 
-        {/* Options */}
         <div className="flex flex-col gap-3 mt-auto pb-2">
           {question.options.map((option, index) => {
             let buttonClass = "bg-white border-2 border-slate-200 text-slate-700 hover:bg-slate-50 shadow-[0_3px_0_0_#e2e8f0]";
@@ -864,28 +1038,44 @@ export default function StudySnapApp() {
         <AlertCircle className="w-10 h-10 text-rose-500" />
       </div>
       <h2 className="text-xl font-bold text-slate-800">Oups !</h2>
-      <p className="text-slate-600 text-xs px-2">{errorMessage}</p>
-      <button 
-        onClick={() => setAppState('library')}
-        className="mt-4 flex items-center justify-center gap-2 bg-slate-800 text-white font-bold text-sm py-2.5 px-5 rounded-xl"
-      >
-        Retour à mes cours
-      </button>
+      <p className="text-slate-600 text-xs px-2 leading-relaxed">{errorMessage}</p>
+
+      <div className="flex flex-col gap-2 w-full max-w-xs mt-2">
+        <button 
+          onClick={() => {
+            setShowKeyModal(true);
+            setAppState('create');
+          }}
+          className="flex items-center justify-center gap-2 bg-violet-600 text-white font-bold text-sm py-2.5 px-4 rounded-xl shadow-sm hover:bg-violet-700 transition-all"
+        >
+          <Key className="w-4 h-4" />
+          <span>Vérifier ma clé API Gemini</span>
+        </button>
+
+        <button 
+          onClick={() => {
+            generateDemoQuiz();
+          }}
+          className="flex items-center justify-center gap-2 bg-emerald-600 text-white font-bold text-sm py-2.5 px-4 rounded-xl shadow-sm hover:bg-emerald-700 transition-all"
+        >
+          <Sparkles className="w-4 h-4" />
+          <span>Tester avec un Quiz Démo</span>
+        </button>
+
+        <button 
+          onClick={() => setAppState('create')}
+          className="mt-1 flex items-center justify-center gap-2 bg-slate-100 text-slate-700 font-bold text-xs py-2 px-4 rounded-xl hover:bg-slate-200"
+        >
+          Reprendre une photo
+        </button>
+      </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 flex justify-center items-center p-3 font-sans">
-      {/* Mobile-sized container acting as smartphone screen */}
-      <div className="w-full max-w-md h-[800px] max-h-[92vh] bg-[#f8fafc] rounded-[2.5rem] shadow-2xl overflow-hidden relative border-[8px] border-white flex flex-col">
-        
-        {/* Smartphone top bar handle */}
-        <div className="h-5 w-full flex justify-center items-end bg-white pb-1 rounded-t-[2rem]">
-          <div className="w-14 h-1.5 bg-slate-200 rounded-full"></div>
-        </div>
-
-        {/* Content Area */}
-        <div className="flex-1 p-5 overflow-y-auto">
+    <div className="min-h-[100dvh] bg-slate-50 flex justify-center font-sans antialiased text-slate-800">
+      <div className="w-full max-w-lg min-h-[100dvh] bg-[#f8fafc] flex flex-col relative px-4 pt-3 pb-6">
+        <div className="flex-1 flex flex-col overflow-y-auto">
           {appState === 'library' && renderLibraryScreen()}
           {appState === 'create' && renderCreateScreen()}
           {appState === 'loading' && renderLoadingScreen()}
@@ -894,7 +1084,71 @@ export default function StudySnapApp() {
           {appState === 'error' && renderErrorScreen()}
         </div>
 
-        {/* Edit Modal overlay */}
+        {/* API Key Modal */}
+        {showKeyModal && (
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl p-5 w-full space-y-3.5 shadow-xl">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-violet-100 text-violet-600">
+                  <Key className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">Clé API Google Gemini</h3>
+                  <p className="text-[11px] text-slate-400">Gratuite sur Google AI Studio</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Obtenez gratuitement votre clé API en 1 minute sur{' '}
+                <a 
+                  href="https://aistudio.google.com/app/apikey" 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="text-violet-600 font-bold underline"
+                >
+                  Google AI Studio
+                </a>.
+              </p>
+
+              <input 
+                type="password"
+                placeholder="Collez votre clé : AIzaSy..."
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                className="w-full bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-slate-800 font-mono text-xs outline-none focus:ring-2 focus:ring-violet-400"
+              />
+
+              <div className="flex gap-2 justify-end pt-1">
+                <button 
+                  onClick={() => setShowKeyModal(false)}
+                  className="px-3 py-2 rounded-xl text-slate-500 font-semibold text-xs hover:bg-slate-100"
+                >
+                  Fermer
+                </button>
+                <button 
+                  onClick={() => saveApiKey(apiKeyInput)}
+                  className="px-4 py-2 rounded-xl bg-violet-600 text-white font-bold text-xs shadow-sm hover:bg-violet-700"
+                >
+                  Enregistrer
+                </button>
+              </div>
+
+              <div className="border-t border-slate-100 pt-2 text-center">
+                <button
+                  onClick={() => {
+                    setShowKeyModal(false);
+                    generateDemoQuiz();
+                  }}
+                  className="text-xs text-emerald-600 font-bold hover:underline"
+                >
+                  ⚡ Continuer sans clé (Mode Démo)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Modal */}
         {courseToEdit && (
           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white rounded-2xl p-5 w-full space-y-4 shadow-xl">
