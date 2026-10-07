@@ -160,8 +160,10 @@ export default function StudySnapApp() {
       if (savedSubjects) setSubjects(JSON.parse(savedSubjects));
       const savedKey = localStorage.getItem('gemini_api_key');
       if (savedKey) {
-        setGeminiApiKey(savedKey);
-        setApiKeyInput(savedKey);
+        // Nettoyage automatique au chargement
+        const cleanSavedKey = savedKey.replace(/[\s"']/g, '');
+        setGeminiApiKey(cleanSavedKey);
+        setApiKeyInput(cleanSavedKey);
       }
     } catch (e) {
       console.error("Failed to load saved data:", e);
@@ -169,9 +171,11 @@ export default function StudySnapApp() {
   }, []);
 
   const saveApiKey = (key) => {
-    const trimmed = key.trim();
-    setGeminiApiKey(trimmed);
-    localStorage.setItem('gemini_api_key', trimmed);
+    // Supprime agressivement tous les espaces, retours à la ligne et guillemets
+    const cleanedKey = key.replace(/[\s"']/g, '');
+    setGeminiApiKey(cleanedKey);
+    setApiKeyInput(cleanedKey);
+    localStorage.setItem('gemini_api_key', cleanedKey);
     setShowKeyModal(false);
   };
 
@@ -317,7 +321,8 @@ export default function StudySnapApp() {
   const handleGenerateQuiz = async () => {
     if (capturedImages.length === 0) return;
 
-    const apiKey = geminiApiKey.trim().replace(/^["']|["']$/g, '');
+    // Double sécurité au moment de l'envoi
+    const apiKey = geminiApiKey.replace(/[\s"']/g, '');
 
     if (!apiKey) {
       setShowKeyModal(true);
