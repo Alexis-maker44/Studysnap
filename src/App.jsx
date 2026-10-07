@@ -337,8 +337,8 @@ export default function StudySnapApp() {
 
           if (models.length > 0) {
             // Sélectionne en priorité un modèle rapide "flash" disponible
-            const chosen = models.find(m => m.includes('2.5-flash')) ||
-                           models.find(m => m.includes('2.0-flash')) ||
+            const chosen = models.find(m => m.includes('3.8-flash')) ||
+                           models.find(m => m.includes('3.5-flash')) ||
                            models.find(m => m.includes('flash')) ||
                            models[0];
             return { model: chosen, apiVersion: ver };
@@ -363,7 +363,7 @@ export default function StudySnapApp() {
     }
 
     // Repli par défaut si le listing n'est pas permis
-    return { model: 'gemini-2.0-flash', apiVersion: 'v1beta' };
+    return { model: 'gemini-3.8-flash', apiVersion: 'v1beta' };
   };
 
   const handleGenerateQuiz = async () => {
