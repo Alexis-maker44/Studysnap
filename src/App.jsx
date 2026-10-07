@@ -160,7 +160,6 @@ export default function StudySnapApp() {
       if (savedSubjects) setSubjects(JSON.parse(savedSubjects));
       const savedKey = localStorage.getItem('gemini_api_key');
       if (savedKey) {
-        // Nettoyage automatique au chargement
         const cleanSavedKey = savedKey.replace(/[\s"']/g, '');
         setGeminiApiKey(cleanSavedKey);
         setApiKeyInput(cleanSavedKey);
@@ -171,12 +170,17 @@ export default function StudySnapApp() {
   }, []);
 
   const saveApiKey = (key) => {
-    // Supprime agressivement tous les espaces, retours à la ligne et guillemets
     const cleanedKey = key.replace(/[\s"']/g, '');
     setGeminiApiKey(cleanedKey);
     setApiKeyInput(cleanedKey);
     localStorage.setItem('gemini_api_key', cleanedKey);
     setShowKeyModal(false);
+  };
+
+  const clearApiKey = () => {
+    setGeminiApiKey('');
+    setApiKeyInput('');
+    localStorage.removeItem('gemini_api_key');
   };
 
   const saveCoursesToStorage = (updatedCourses) => {
@@ -265,10 +269,6 @@ export default function StudySnapApp() {
     startCourseQuiz(newCourse);
   };
 
-  /**
-   * Récupère une liste triée des modèles disponibles.
-   * On crée un "Plan B" : si 3.8 est indisponible, on essaiera les autres.
-   */
   const discoverWorkingModels = async (cleanKey) => {
     const apiVersions = ['v1beta', 'v1'];
     let lastGoogleError = '';
@@ -285,12 +285,13 @@ export default function StudySnapApp() {
             .map(m => m.name.replace(/^models\//, ''));
 
           if (models.length > 0) {
-            // On trie : 3.8 en premier, puis 3.5, puis 2.0, etc.
             const flashModels = models.filter(m => m.includes('flash')).sort((a, b) => {
               if (a.includes('3.8')) return -1;
               if (b.includes('3.8')) return 1;
               if (a.includes('3.5')) return -1;
               if (b.includes('3.5')) return 1;
+              if (a.includes('2.0')) return -1;
+              if (b.includes('2.0')) return 1;
               return 0;
             });
 
@@ -311,17 +312,15 @@ export default function StudySnapApp() {
     }
 
     if (lastGoogleError && (lastGoogleError.toLowerCase().includes('api key not valid') || lastGoogleError.toLowerCase().includes('invalid'))) {
-      throw new Error("Votre clé API n'est pas reconnue par Google. Vérifiez l'avoir bien copiée en entier.");
+      throw new Error(`Refusé par Google: ${lastGoogleError}`);
     }
     
-    // Valeurs par défaut avec un plan de repli si l'API de listing échoue
     return { modelsList: ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'], apiVersion: 'v1beta' };
   };
 
   const handleGenerateQuiz = async () => {
     if (capturedImages.length === 0) return;
 
-    // Double sécurité au moment de l'envoi
     const apiKey = geminiApiKey.replace(/[\s"']/g, '');
 
     if (!apiKey) {
@@ -390,7 +389,6 @@ RÈGLES IMPORTANTES :
       let apiResponse = null;
       let lastLoopError = "";
 
-      // SYSTÈME DE CASCADE : On essaie le meilleur modèle, si surchargé (High Demand), on passe au suivant.
       for (const model of modelsList) {
         try {
           const apiUrl = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
@@ -409,12 +407,12 @@ RÈGLES IMPORTANTES :
               }
             } catch (_) {}
 
+            // Affichage explicite de l'erreur renvoyée par Google au lieu du message générique
             if (response.status === 400 || response.status === 401 || response.status === 403) {
-              throw new Error("Clé API invalide ou non autorisée. Allez sur aistudio.google.com pour vérifier votre clé.");
+              throw new Error(`Erreur d'accès Google (${response.status}) : ${errorDetail}`);
             } else if (response.status === 413) {
               throw new Error("Les photos sont trop volumineuses. Réduisez le nombre de pages.");
             } else if (response.status === 503 || response.status === 429 || errorDetail.toLowerCase().includes('high demand') || errorDetail.toLowerCase().includes('overloaded')) {
-              // ERREUR DE SURCHARGE : On lance une erreur spécifique pour déclencher le passage au modèle suivant
               throw new Error(`HIGH_DEMAND`);
             } else {
               throw new Error(`Google AI (${model}) : ${errorDetail}`);
@@ -422,15 +420,14 @@ RÈGLES IMPORTANTES :
           }
 
           apiResponse = await response.json();
-          break; // Succès ! On sort de la boucle.
+          break; 
 
         } catch (error) {
           if (error.message === 'HIGH_DEMAND') {
-            lastLoopError = "Les serveurs principaux de Google sont actuellement surchargés.";
-            console.warn(`Le modèle ${model} est surchargé. Passage au modèle suivant...`);
-            continue; // Le secret est ici : on passe au modèle suivant dans la liste !
+            lastLoopError = "Les serveurs de Google sont très sollicités. Veuillez réessayer.";
+            continue; 
           } else {
-            throw error; // Si c'est une vraie erreur (ex: mauvaise clé), on arrête tout.
+            throw error; 
           }
         }
       }
@@ -556,7 +553,7 @@ RÈGLES IMPORTANTES :
 
   return (
     <div className="min-h-[100dvh] bg-slate-50 flex justify-center font-sans antialiased text-slate-800">
-      <div className="w-full max-w-lg min-h-[100dvh] bg-[#f8fafc] flex flex-col relative px-4 pt-3 pb-6">
+      <div className="w-full min-h-[100dvh] bg-[#f8fafc] flex flex-col relative px-4 pt-3 pb-6">
         <div className="flex-1 flex flex-col overflow-y-auto">
           {appState === 'library' && (
             <div className="flex flex-col h-full animate-in fade-in duration-300">
@@ -1076,7 +1073,10 @@ RÈGLES IMPORTANTES :
                 <AlertCircle className="w-10 h-10 text-rose-500" />
               </div>
               <h2 className="text-xl font-bold text-slate-800">Oups !</h2>
-              <p className="text-slate-600 text-xs px-2 leading-relaxed">{errorMessage}</p>
+              {/* C'est ici que l'erreur EXACTE de Google va s'afficher */}
+              <p className="text-rose-600 font-mono text-[10px] px-2 bg-rose-50 py-2 rounded-lg text-left break-words max-w-full">
+                {errorMessage}
+              </p>
 
               <div className="flex flex-col gap-2 w-full max-w-xs mt-2">
                 <button 
@@ -1093,7 +1093,7 @@ RÈGLES IMPORTANTES :
                   onClick={() => setAppState('create')}
                   className="mt-1 flex items-center justify-center gap-2 bg-slate-100 text-slate-700 font-bold text-xs py-2 px-4 rounded-xl hover:bg-slate-200"
                 >
-                  Essayer avec un autre document
+                  Retour
                 </button>
               </div>
             </div>
@@ -1103,14 +1103,25 @@ RÈGLES IMPORTANTES :
         {showKeyModal && (
           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white rounded-2xl p-5 w-full space-y-3.5 shadow-xl">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-violet-100 text-violet-600">
-                  <Key className="w-5 h-5" />
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-violet-100 text-violet-600">
+                    <Key className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm">Clé API Google Gemini</h3>
+                    <p className="text-[11px] text-slate-400">Gratuite sur Google AI Studio</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-bold text-slate-800 text-sm">Clé API Google Gemini</h3>
-                  <p className="text-[11px] text-slate-400">Gratuite sur Google AI Studio</p>
-                </div>
+                {/* Nouveau bouton pour effacer la clé défectueuse */}
+                {geminiApiKey && (
+                  <button 
+                    onClick={clearApiKey}
+                    className="text-[10px] text-rose-500 font-bold hover:underline bg-rose-50 px-2 py-1 rounded-md"
+                  >
+                    Effacer la clé
+                  </button>
+                )}
               </div>
               <p className="text-xs text-slate-600 leading-relaxed">
                 Obtenez gratuitement votre clé API en 1 minute sur{' '}
@@ -1142,17 +1153,6 @@ RÈGLES IMPORTANTES :
                   className="px-4 py-2 rounded-xl bg-violet-600 text-white font-bold text-xs shadow-sm hover:bg-violet-700"
                 >
                   Enregistrer
-                </button>
-              </div>
-              <div className="border-t border-slate-100 pt-2 text-center">
-                <button
-                  onClick={() => {
-                    setShowKeyModal(false);
-                    generateDemoQuiz();
-                  }}
-                  className="text-xs text-emerald-600 font-bold hover:underline"
-                >
-                  ⚡ Continuer sans clé (Mode Démo)
                 </button>
               </div>
             </div>
