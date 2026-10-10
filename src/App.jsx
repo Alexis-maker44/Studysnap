@@ -5,42 +5,14 @@ import {
   Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle
 } from 'lucide-react';
 
-// --- DONNÉES PAR DÉFAUT ---
-const DEFAULT_QUESTIONS = [
-  {
-    id: 1,
-    question: "Quelle est la principale fonction d'un hook useState en React ?",
-    options: [
-      "Gérer les effets secondaires",
-      "Ajouter un état local à un composant fonctionnel",
-      "Optimiser les performances de rendu",
-      "Créer un contexte global"
-    ],
-    correctAnswer: 1,
-    explanation: "useState permet d'ajouter un état local à un composant fonctionnel React."
-  },
-  {
-    id: 2,
-    question: "Quel hook est utilisé pour exécuter du code après le rendu ?",
-    options: ["useMemo", "useCallback", "useEffect", "useRef"],
-    correctAnswer: 2,
-    explanation: "useEffect s'exécute après le rendu pour gérer les effets secondaires."
-  }
-];
-
-const DEFAULT_FLASHCARDS = [
-  { id: 1, front: "JSX", back: "Extension de syntaxe JavaScript permettant d'écrire du HTML dans React." },
-  { id: 2, front: "Props", back: "Arguments et données transmis de composant en composant." }
-];
-
-const DEFAULT_FILLBLANKS = [
-  {
-    id: 1,
-    sentenceWithBlank: "Le hook [___] permet d'ajouter un état local à un composant fonctionnel.",
-    missingWord: "useState",
-    explanation: "useState est le hook d'état de base."
-  }
-];
+// --- LISTE DES MOTS À EXCLURE (ANTI-BRUIT) ---
+const STOP_WORDS = new Set([
+  'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'l', 'ce', 'cette', 'ces',
+  'mon', 'ton', 'son', 'ma', 'ta', 'sa', 'mes', 'tes', 'ses', 'nos', 'vos', 'leurs',
+  'qui', 'que', 'quoi', 'dont', 'où', 'quand', 'comment', 'pourquoi', 'quel', 'quelle', 'quels', 'quelles',
+  'est', 'sont', 'a', 'ont', 'fait', 'fais', 'font', 'pour', 'dans', 'sur', 'avec', 'sans', 'par', 'pour',
+  'et', 'ou', 'mais', 'donc', 'car', 'ni', 'or', 'plus', 'moins', 'tres', 'aussi', 'bien', 'autre', 'aux'
+]);
 
 const speakText = (text) => {
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
@@ -51,147 +23,167 @@ const speakText = (text) => {
   }
 };
 
-// --- MOTEUR DE GÉNÉRATION D'EXERCICES (UNIFIÉ) ---
-function generateAllExercisesFromText(sourceText) {
-  const rawLines = sourceText
-    .split(/(?:\r?\n)+/)
-    .map((l) => l.replace(/^[-•*]\s*/, '').trim())
-    .filter((l) => l.length > 5);
+// --- NETTOYAGE ROBUSTE DU TEXTE (OCR & PDF) ---
+function cleanExtractedText(rawText) {
+  if (!rawText) return [];
 
-  const rawSentences = sourceText
+  return rawText
+    // Supprime les caractères non lisibles d'OCR
+    .replace(/[^\w\sàâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ.,;:!?'"-]/g, ' ')
     .split(/(?:[.!?\n]+)/)
-    .map((s) => s.replace(/^[-•*]\s*/, '').trim())
-    .filter((s) => s.length > 15);
+    .map((sentence) => sentence.replace(/^[-•*0-9.]+\s*/, '').trim())
+    .filter((sentence) => {
+      // Filtrer les bribes de phrases trop courtes ou sans mots pertinents
+      const words = sentence.split(/\s+/).filter(w => w.length > 2);
+      return sentence.length >= 25 && words.length >= 4;
+    });
+}
+
+// --- EXTRACTEUR DE CONCEPTS CLES (VALIDES SEULEMENT) ---
+function extractKeyConcept(sentence) {
+  const cleanSentence = sentence.replace(/[,;:!?()]/g, '');
+  const words = cleanSentence.split(/\s+/);
+
+  // Chercher un mot long (>= 5 lettres) qui n'est pas dans les STOP_WORDS
+  const validWords = words.filter((w) => {
+    const lower = w.toLowerCase();
+    return w.length >= 5 && !STOP_WORDS.has(lower) && !/^\d+$/.test(w);
+  });
+
+  return validWords.length > 0 ? validWords[0] : null;
+}
+
+// --- MOTEUR DE GÉNÉRATION INTELLIGENT ET FILTRÉ ---
+function generateAllExercisesFromText(sourceText) {
+  const cleanSentences = cleanExtractedText(sourceText);
 
   const generatedQuestions = [];
   const generatedFlashcards = [];
   const generatedFillBlanks = [];
 
-  // 1. Détection des lignes structurées (Terme : Définition)
-  rawLines.forEach((line) => {
-    const colonMatch = line.match(/^(.+?)\s*[:=–-]\s*(.+)$/);
-    if (colonMatch) {
-      const term = colonMatch[1].trim();
-      const def = colonMatch[2].trim();
-
-      if (term.length > 1 && term.length < 40 && def.length > 5) {
-        generatedFlashcards.push({
-          id: generatedFlashcards.length + 1,
-          front: term,
-          back: def
-        });
-
-        generatedFillBlanks.push({
-          id: generatedFillBlanks.length + 1,
-          sentenceWithBlank: `${term} : [___]`,
-          missingWord: def.split(' ')[0],
-          explanation: line
-        });
-      }
-    }
-  });
-
-  // 2. Détection des définitions par verbes pivots
-  rawSentences.forEach((sentence) => {
-    const defMatch = sentence.match(/(.+?)\s+(est|sont|désigne|représente|permet de|signifie|consiste à)\s+(.+)/i);
+  cleanSentences.forEach((sentence, index) => {
+    // 1. Détection des définitions explicites (ex: "Le hook useState permet de...")
+    const defMatch = sentence.match(/^(.{3,40}?)\s+(est|sont|désigne|représente|permet de|signifie|consiste à)\s+(.+)/i);
 
     if (defMatch) {
-      const subject = defMatch[1].trim();
+      const subject = defMatch[1].trim().replace(/^(Le|La|Les|Un|Une|L'|Le concept de)\s+/i, '');
       const definition = defMatch[3].trim();
 
-      if (subject.length > 2 && subject.length < 45 && definition.length > 10) {
-        if (!generatedFlashcards.some(f => f.front.toLowerCase() === subject.toLowerCase())) {
-          generatedFlashcards.push({
-            id: generatedFlashcards.length + 1,
-            front: subject,
-            back: definition.charAt(0).toUpperCase() + definition.slice(1)
-          });
-        }
+      // Vérifier que le sujet n'est pas un mot parasite
+      if (subject.length >= 3 && !STOP_WORDS.has(subject.toLowerCase()) && definition.length >= 10) {
+        
+        // Flashcard propre
+        generatedFlashcards.push({
+          id: generatedFlashcards.length + 1,
+          front: subject.charAt(0).toUpperCase() + subject.slice(1),
+          back: definition.charAt(0).toUpperCase() + definition.slice(1)
+        });
 
+        // QCM avec propositions sensées
         const correctText = definition;
         const wrongOptions = [
-          `Une méthode alternative non liée à ${subject}.`,
-          `Un concept obsolète dans ce domaine.`,
-          `Une erreur de configuration fréquente.`
+          `Un mécanisme indépendant non lié à ${subject}.`,
+          `Un comportement obsolète dans ce contexte.`,
+          `Une erreur de formulation courante.`
         ];
         const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
 
         generatedQuestions.push({
           id: generatedQuestions.length + 1,
-          question: `Quelle est la définition exacte du concept « ${subject} » ?`,
+          question: `Quelle est la fonction ou définition de « ${subject} » ?`,
           options: allOptions,
           correctAnswer: allOptions.indexOf(correctText),
           explanation: sentence
         });
 
-        const sentenceWithBlank = sentence.replace(new RegExp(subject, 'gi'), '[___]');
+        // Phrase à trous sur un vrai mot-clé
+        const keyConcept = extractKeyConcept(sentence) || subject;
+        const sentenceWithBlank = sentence.replace(new RegExp(`\\b${keyConcept}\\b`, 'gi'), '[___]');
+
         if (sentenceWithBlank !== sentence) {
           generatedFillBlanks.push({
             id: generatedFillBlanks.length + 1,
             sentenceWithBlank,
-            missingWord: subject,
+            missingWord: keyConcept,
             explanation: sentence
           });
         }
       }
+    } else {
+      // 2. Traitement pour phrases informelles avec mots-clés riches
+      const keyConcept = extractKeyConcept(sentence);
+
+      if (keyConcept && generatedQuestions.length < 8) {
+        generatedFlashcards.push({
+          id: generatedFlashcards.length + 1,
+          front: keyConcept.charAt(0).toUpperCase() + keyConcept.slice(1),
+          back: sentence
+        });
+
+        const sentenceWithBlank = sentence.replace(new RegExp(`\\b${keyConcept}\\b`, 'gi'), '[___]');
+        if (sentenceWithBlank !== sentence) {
+          generatedFillBlanks.push({
+            id: generatedFillBlanks.length + 1,
+            sentenceWithBlank,
+            missingWord: keyConcept,
+            explanation: sentence
+          });
+        }
+
+        const correctText = sentence;
+        const wrongOptions = [
+          "Cette affirmation est contredite par le cours.",
+          "Information non pertinente par rapport au sujet.",
+          "Aucune de ces propositions n'est exacte."
+        ];
+        const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
+
+        generatedQuestions.push({
+          id: generatedQuestions.length + 1,
+          question: `Quelle affirmation est exacte concernant « ${keyConcept} » ?`,
+          options: allOptions,
+          correctAnswer: allOptions.indexOf(correctText),
+          explanation: sentence
+        });
+      }
     }
   });
 
-  // 3. Secours universel si le texte est dense ou informel
-  if (generatedFlashcards.length < 2 && rawSentences.length > 0) {
-    rawSentences.slice(0, 5).forEach((sentence, i) => {
-      const words = sentence.split(' ');
-      const keyWord = words.find((w) => w.length > 5) || words[0] || 'Point clé';
-      const cleanKey = keyWord.replace(/[,.;:!?()]/g, '');
+  // Sécurité par défaut si le texte est illisible ou trop court
+  const defaultFallbackQ = [
+    {
+      id: 1,
+      question: "Exemple : Quelle est la meilleure approche de révision ?",
+      options: ["Réviser activement avec des Quiz", "Lire passivement sans pratiquer", "Apprendre par cœur sans comprendre", "Ignorer les retours d'erreurs"],
+      correctAnswer: 0,
+      explanation: "La révision active permet une meilleure rétention en mémoire."
+    }
+  ];
 
-      generatedFlashcards.push({
-        id: i + 1,
-        front: cleanKey,
-        back: sentence
-      });
+  const defaultFallbackFc = [
+    { id: 1, front: "Rappel", back: "Veuillez fournir un texte avec des phrases complètes pour générer des exercices sur-mesure." }
+  ];
 
-      generatedFillBlanks.push({
-        id: i + 1,
-        sentenceWithBlank: sentence.replace(cleanKey, '[___]'),
-        missingWord: cleanKey,
-        explanation: sentence
-      });
-
-      const correctText = sentence;
-      const wrongOptions = [
-        "Cette affirmation est fausse d'après le cours.",
-        "Information non mentionnée dans le document.",
-        "Aucune de ces propositions."
-      ];
-      const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
-
-      generatedQuestions.push({
-        id: i + 1,
-        question: `À quoi correspond « ${cleanKey} » dans le cours ?`,
-        options: allOptions,
-        correctAnswer: allOptions.indexOf(correctText),
-        explanation: sentence
-      });
-    });
-  }
+  const defaultFallbackFb = [
+    { id: 1, sentenceWithBlank: "La révision [___] est plus efficace.", missingWord: "active", explanation: "L'apprentissage actif stimule la mémoire." }
+  ];
 
   return {
-    questions: generatedQuestions.length > 0 ? generatedQuestions : DEFAULT_QUESTIONS,
-    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : DEFAULT_FLASHCARDS,
-    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : DEFAULT_FILLBLANKS
+    questions: generatedQuestions.length > 0 ? generatedQuestions : defaultFallbackQ,
+    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : defaultFallbackFc,
+    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : defaultFallbackFb
   };
 }
 
-// --- CONTEXTUALISATION & MISA EN SÉQUENCE DES ÉTAPES ---
 function buildSessionSteps(questions, flashcards, fillBlanks) {
   const steps = [];
 
-  // Étape 1 : Découverte avec Flashcards
+  // 1. Découverte (Flashcards)
   flashcards.slice(0, 3).forEach((fc) => {
     steps.push({ type: 'flashcard', data: fc });
   });
 
-  // Étape 2 & 3 : Alternance QCM et Phrases à trous
+  // 2. Entraînement mixé (QCM + Trous)
   const maxInter = Math.max(questions.length, fillBlanks.length);
   for (let i = 0; i < maxInter; i++) {
     if (questions[i]) steps.push({ type: 'quiz', data: questions[i] });
@@ -202,21 +194,19 @@ function buildSessionSteps(questions, flashcards, fillBlanks) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('home'); // 'home' | 'session' | 'decks'
+  const [activeTab, setActiveTab] = useState('home');
   
-  // Matières et Decks
   const [subjectList, setSubjectList] = useState(['React / Web', 'Histoire', 'Mathématiques']);
   const [selectedSubject, setSelectedSubject] = useState('React / Web');
   const [newSubjectInput, setNewSubjectInput] = useState('');
   const [savedDecks, setSavedDecks] = useState([]);
 
-  // Données courantes du deck
-  const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
-  const [flashcards, setFlashcards] = useState(DEFAULT_FLASHCARDS);
-  const [fillBlanks, setFillBlanks] = useState(DEFAULT_FILLBLANKS);
+  const [questions, setQuestions] = useState([]);
+  const [flashcards, setFlashcards] = useState([]);
+  const [fillBlanks, setFillBlanks] = useState([]);
   const [rawInputText, setRawInputText] = useState('');
 
-  // SESSIONS GAMIFIÉES
+  // GAMIFICATION
   const [sessionSteps, setSessionSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [lives, setLives] = useState(3);
@@ -224,14 +214,12 @@ export default function App() {
   const [combo, setCombo] = useState(0);
   const [isSessionFinished, setIsSessionFinished] = useState(false);
 
-  // État local des étapes
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [userBlankInput, setUserBlankInput] = useState('');
-  const [stepResultState, setStepResultState] = useState(null); // 'correct' | 'incorrect'
+  const [stepResultState, setStepResultState] = useState(null);
   const [timeLeft, setTimeLeft] = useState(25);
   const [isTimerActive, setIsTimerActive] = useState(false);
 
-  // Caméra & OCR
   const [isCameraActive, setIsCameraActive] = useState(false);
   const videoRef = useRef(null);
 
@@ -240,7 +228,6 @@ export default function App() {
   const [ocrProgress, setOcrProgress] = useState('');
   const [history, setHistory] = useState([]);
 
-  // Chargement des données locales
   useEffect(() => {
     try {
       const savedHistory = localStorage.getItem('studysnap_history');
@@ -292,7 +279,6 @@ export default function App() {
     });
   };
 
-  // LANCER UNE SESSION GAMIFIÉE
   const startSession = useCallback((qList = questions, fcList = flashcards, fbList = fillBlanks) => {
     const steps = buildSessionSteps(qList, fcList, fbList);
     setSessionSteps(steps);
@@ -323,7 +309,6 @@ export default function App() {
     localStorage.setItem('studysnap_decks', JSON.stringify(updated));
   };
 
-  // PASSAGE À L'ÉTAPE SUIVANTE
   const advanceToNextStep = useCallback(() => {
     if (currentStepIdx + 1 < sessionSteps.length && lives > 0) {
       setCurrentStepIdx((prev) => prev + 1);
@@ -347,12 +332,10 @@ export default function App() {
     }
   }, [currentStepIdx, sessionSteps.length, lives, score, saveHistory, selectedSubject]);
 
-  // CHRONOMÈTRE
   useEffect(() => {
     let timer;
     const currentStep = sessionSteps[currentStepIdx];
     
-    // Le timer est désactivé sur les flashcards
     if (isTimerActive && timeLeft > 0 && !isSessionFinished && activeTab === 'session' && currentStep?.type !== 'flashcard') {
       timer = setInterval(() => setTimeLeft((p) => p - 1), 1000);
     } else if (timeLeft === 0 && isTimerActive && !isSessionFinished && currentStep?.type !== 'flashcard') {
@@ -364,7 +347,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [isTimerActive, timeLeft, isSessionFinished, activeTab, currentStepIdx, sessionSteps]);
 
-  // VALIDATION QCM
   const handleAnswerSelect = (idx) => {
     if (selectedAnswer !== null || stepResultState !== null) return;
     setSelectedAnswer(idx);
@@ -384,7 +366,6 @@ export default function App() {
     }
   };
 
-  // VALIDATION PHRASE À TROUS
   const handleCheckFillBlank = () => {
     if (stepResultState !== null) return;
     setIsTimerActive(false);
@@ -399,15 +380,14 @@ export default function App() {
       setStepResultState('incorrect');
       setLives((l) => Math.max(0, l - 1));
       setCombo(0);
-      speakText("Incorrect. C'était " + currentStep.data.missingWord);
+      speakText("Incorrect. La réponse était " + currentStep.data.missingWord);
     }
   };
 
-  // TRAITEMENT DU TEXTE BRUT
   const handleProcessText = (text) => {
     setUploadError(null);
     if (!text || !text.trim()) {
-      setUploadError("Le contenu du texte est vide.");
+      setUploadError("Le texte fourni est trop court ou vide.");
       return;
     }
     setIsAnalyzing(true);
@@ -430,13 +410,12 @@ export default function App() {
         startSession(generated.questions, generated.flashcards, generated.fillBlanks);
       } catch (e) {
         console.error(e);
-        setUploadError("Une erreur est survenue lors de l'analyse.");
+        setUploadError("Une erreur est survenue lors du filtrage du texte.");
         setIsAnalyzing(false);
       }
     }, 300);
   };
 
-  // GESTION CAMÉRA & OCR
   const startCamera = async () => {
     setIsCameraActive(true);
     setUploadError(null);
@@ -470,7 +449,7 @@ export default function App() {
 
   const processImageOCR = async (imageSrc) => {
     setIsAnalyzing(true);
-    setOcrProgress("Extraction du texte de la photo...");
+    setOcrProgress("Extraction & Filtrage intelligent de la photo...");
 
     try {
       if (!window.Tesseract) {
@@ -491,7 +470,7 @@ export default function App() {
       setOcrProgress('');
       handleProcessText(text);
     } catch (err) {
-      setUploadError(err.message || "Erreur de lecture de l'image.");
+      setUploadError(err.message || "Erreur lors de la numérisation.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -506,7 +485,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction du PDF...");
+        setOcrProgress("Extraction & Filtrage du PDF...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -528,7 +507,7 @@ export default function App() {
           fullText += tokenized.items.map((item) => item.str).join(' ') + '\n';
         }
 
-        if (!fullText.trim()) throw new Error("Le PDF ne contient pas de texte sélectable.");
+        if (!fullText.trim()) throw new Error("Le PDF ne contient pas de texte lisible.");
 
         setRawInputText(fullText);
         setOcrProgress('');
@@ -556,18 +535,17 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
-      {/* HEADER */}
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.0</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.1</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
             <Home className="w-4 h-4" /> <span className="hidden md:inline">Accueil</span>
           </button>
           <button onClick={() => startSession()} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'session' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
-            <Play className="w-4 h-4" /> <span className="hidden md:inline">Lancer la Révision</span>
+            <Play className="w-4 h-4" /> <span className="hidden md:inline">Révision Active</span>
           </button>
           <button onClick={() => setActiveTab('decks')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'decks' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
             <Folder className="w-4 h-4" /> <span className="hidden md:inline">Mes Decks</span>
@@ -576,16 +554,15 @@ export default function App() {
       </header>
 
       <main className="max-w-3xl mx-auto p-4 md:p-6">
-        {/* 1. ACCUEIL & NUMÉRISATION */}
+        {/* ACCUEIL */}
         {activeTab === 'home' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Importez votre cours pour démarrer</h2>
-                <p className="text-slate-600 text-sm mt-1">Créez un parcours gamifié personnalisé en un clic.</p>
+                <h2 className="text-2xl font-bold text-slate-900">Importation intelligente du cours</h2>
+                <p className="text-slate-600 text-sm mt-1">Le texte est filtré automatiquement pour éliminer le bruit et créer des exercices sensés.</p>
               </div>
 
-              {/* Choix de la matière */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">1. Choisir ou créer une matière</label>
                 <div className="flex space-x-2">
@@ -613,9 +590,8 @@ export default function App() {
 
               <div className="border-t border-slate-100 my-2"></div>
 
-              {/* Numérisation Photo / PDF */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner votre cours (PDF / Photo / Image)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Numériser votre document (PDF / Photo)</label>
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
                     <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
@@ -637,13 +613,12 @@ export default function App() {
                     <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
                       <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <Upload className="w-6 h-6 text-indigo-500 mb-1" />
-                      <span className="text-sm font-semibold text-slate-700">Importer PDF, Image ou Texte</span>
+                      <span className="text-sm font-semibold text-slate-700">Importer PDF ou Image</span>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Texte direct */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Ou copier-coller votre texte</label>
                 <textarea
@@ -656,10 +631,10 @@ export default function App() {
                 <button
                   onClick={() => handleProcessText(rawInputText)}
                   disabled={!rawInputText.trim() || isAnalyzing}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 text-base shadow-sm"
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
                 >
                   <Sparkles className="w-5 h-5 text-amber-300" />
-                  <span>{isAnalyzing ? (ocrProgress || "Génération du parcours...") : "Lancer le Parcours de Révision"}</span>
+                  <span>{isAnalyzing ? (ocrProgress || "Filtrage & Génération...") : "Lancer le Parcours de Révision"}</span>
                 </button>
               </div>
 
@@ -673,12 +648,11 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. MODE PARCOURS DE RÉVISION UNIFIÉ & GAMIFIÉ */}
+        {/* PARCOURS GAMIFIÉ */}
         {activeTab === 'session' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
             {!isSessionFinished && currentStep ? (
               <div>
-                {/* BARRE DE PROGRESSION & STATS GAMIFIÉES */}
                 <div className="space-y-3 mb-6">
                   <div className="flex justify-between items-center text-sm font-semibold">
                     <div className="flex items-center space-x-2">
@@ -691,17 +665,12 @@ export default function App() {
                     </div>
                     
                     <div className="flex items-center space-x-4">
-                      {/* Vies */}
                       <div className="flex space-x-1">
                         {[1, 2, 3].map((heart) => (
-                          <Heart 
-                            key={heart} 
-                            className={`w-5 h-5 ${heart <= lives ? 'text-red-500 fill-red-500' : 'text-slate-200'}`} 
-                          />
+                          <Heart key={heart} className={`w-5 h-5 ${heart <= lives ? 'text-red-500 fill-red-500' : 'text-slate-200'}`} />
                         ))}
                       </div>
 
-                      {/* Points */}
                       <div className="flex items-center space-x-1 text-slate-700 font-mono">
                         <Award className="w-4 h-4 text-indigo-600" />
                         <span>{score} pts</span>
@@ -709,7 +678,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Barre de progression visuelle */}
                   <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
                     <div 
                       className="bg-indigo-600 h-full transition-all duration-300 rounded-full"
@@ -718,7 +686,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* --- SOUS-MODE 1 : FLASHCARD DE DÉCOUVERTE --- */}
+                {/* FLASHCARD */}
                 {currentStep.type === 'flashcard' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
@@ -730,19 +698,13 @@ export default function App() {
                       </button>
                     </div>
 
-                    <div 
-                      onClick={() => setStepResultState('correct')}
-                      className="bg-gradient-to-br from-indigo-50/50 to-purple-50/50 border-2 border-indigo-100 rounded-2xl p-6 min-h-56 flex flex-col items-center justify-center text-center relative select-none cursor-pointer"
-                    >
+                    <div className="bg-gradient-to-br from-indigo-50/50 to-purple-50/50 border-2 border-indigo-100 rounded-2xl p-6 min-h-56 flex flex-col items-center justify-center text-center select-none">
                       <h3 className="text-xl font-bold text-slate-900 mb-3">{currentStep.data.front}</h3>
                       <p className="text-slate-700 text-sm max-w-lg leading-relaxed">{currentStep.data.back}</p>
                     </div>
 
                     <div className="flex justify-end">
-                      <button 
-                        onClick={advanceToNextStep}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2.5 rounded-xl flex items-center space-x-2 transition"
-                      >
+                      <button onClick={advanceToNextStep} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2.5 rounded-xl flex items-center space-x-2 transition">
                         <span>J'ai compris !</span>
                         <ChevronRight className="w-4 h-4" />
                       </button>
@@ -750,7 +712,7 @@ export default function App() {
                   </div>
                 )}
 
-                {/* --- SOUS-MODE 2 : QUIZ / QCM --- */}
+                {/* QCM */}
                 {currentStep.type === 'quiz' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
@@ -808,7 +770,7 @@ export default function App() {
                   </div>
                 )}
 
-                {/* --- SOUS-MODE 3 : PHRASE À TROUS --- */}
+                {/* TROUS */}
                 {currentStep.type === 'fillblank' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
@@ -849,11 +811,10 @@ export default function App() {
                 )}
               </div>
             ) : (
-              /* ÉCRAN DE BILAN DU PARCOURS */
               <div className="text-center py-6 space-y-6">
                 <Award className="w-16 h-16 text-amber-500 mx-auto" />
                 <h2 className="text-2xl font-bold text-slate-800">
-                  {lives > 0 ? "Session terminée !" : "Oups ! Plus de vies."}
+                  {lives > 0 ? "Session terminée !" : "Plus de vies disponible !"}
                 </h2>
                 
                 <div className="bg-indigo-50 p-6 rounded-2xl inline-block space-y-2">
@@ -871,7 +832,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. MES DECKS & HISTORIQUE */}
+        {/* MES DECKS */}
         {activeTab === 'decks' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
