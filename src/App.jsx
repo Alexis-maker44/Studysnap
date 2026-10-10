@@ -2,10 +2,9 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, 
-  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle
+  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu
 } from 'lucide-react';
 
-// --- LISTE DES MOTS À EXCLURE (ANTI-BRUIT) ---
 const STOP_WORDS = new Set([
   'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'l', 'ce', 'cette', 'ces',
   'mon', 'ton', 'son', 'ma', 'ta', 'sa', 'mes', 'tes', 'ses', 'nos', 'vos', 'leurs',
@@ -23,108 +22,119 @@ const speakText = (text) => {
   }
 };
 
-// --- NETTOYAGE ROBUSTE & DÉTECTION DE SCHÉMAS/LÉGENDES ---
-function cleanExtractedText(rawText) {
-  if (!rawText) return [];
+// --- GÉNÉRATION VIA IA EXTERNE (OPENAI / COMPATIBLE) ---
+async function generateExercisesWithExternalAI(sourceText, apiKey) {
+  const prompt = `
+Tu es un expert pédagogique. Analyse le cours suivant et génère exactement 5 questions sous forme de JSON strict.
+Contenu du cours :
+"""${sourceText.slice(0, 3500)}"""
 
-  return rawText
-    .replace(/[^\w\sàâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ.,;:!?'"-]/g, ' ')
-    .split(/(?:[.!?\n]+)/)
-    .map((sentence) => sentence.replace(/^[-•*0-9.]+\s*/, '').trim())
-    .filter((sentence) => {
-      const words = sentence.split(/\s+/).filter(w => w.length > 2);
-      // Conserve les phrases de cours ou les légendes de schémas (marquées par Figure, Schéma, Tableau)
-      const isSchemaOrFigure = /^(figure|schéma|tableau|graphique|légende|source)\b/i.test(sentence);
-      return (sentence.length >= 20 && words.length >= 3) || isSchemaOrFigure;
-    });
-}
-
-// --- EXTRACTION DE CONCEPTS CLES ---
-function extractKeyConcept(sentence) {
-  const cleanSentence = sentence.replace(/[,;:!?()]/g, '');
-  const words = cleanSentence.split(/\s+/);
-  const validWords = words.filter((w) => {
-    const lower = w.toLowerCase();
-    return w.length >= 4 && !STOP_WORDS.has(lower) && !/^\d+$/.test(w);
-  });
-  return validWords.length > 0 ? validWords[0] : null;
-}
-
-// --- MOTEUR DE GÉNÉRATION COUVRANT TOUT LE DOCUMENT AVEC DISTRACTEURS SUBTILS ---
-function generateAllExercisesFromText(sourceText) {
-  const cleanSentences = cleanExtractedText(sourceText);
-
-  // Échantillonnage intelligent pour couvrir tout le document (du début à la fin)
-  let sampledSentences = cleanSentences;
-  if (cleanSentences.length > 15) {
-    const step = Math.max(1, Math.floor(cleanSentences.length / 12));
-    sampledSentences = [];
-    for (let i = 0; i < cleanSentences.length; i += step) {
-      sampledSentences.push(cleanSentences[i]);
+Format attendu (reponds UNIQUEMENT avec un objet JSON valide) :
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "Intitulé clair et précis d'une question importante sur le cours",
+      "options": ["Bonne réponse", "Mauvaise réponse 1 crédible", "Mauvaise réponse 2 crédible", "Mauvaise réponse 3 crédible"],
+      "correctAnswer": 0,
+      "explanation": "Explication pédagogique de la réponse."
     }
+  ],
+  "flashcards": [
+    { "id": 1, "front": "Concept ou mot-clé", "back": "Définition ou explication claire." }
+  ],
+  "fillBlanks": [
+    { "id": 1, "sentenceWithBlank": "La phrase avec un [___] à compléter.", "missingWord": "mot", "explanation": "Rappel de la notion." }
+  ]
+}
+`;
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'gpt-3.5-turbo',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.4
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error("Erreur de connexion à l'API IA (Vérifiez la clé API).");
   }
 
-  const rawPairs = [];
+  const data = await response.json();
+  const rawContent = data.choices[0].message.content.trim();
+  const jsonContent = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
+  return JSON.parse(jsonContent);
+}
 
-  sampledSentences.forEach((sentence) => {
-    const defMatch = sentence.match(/^(.{3,40}?)\s+(est|sont|désigne|représente|permet de|signifie|consiste à)\s+(.+)/i);
-    const schemaMatch = sentence.match(/^(figure|schéma|tableau|graphique)\s*([0-9a-z-]*)\s*[:–-]\s*(.+)/i);
+// --- GÉNÉRATION EN MODE LOCAL (FALLBACK AUTOMATIQUE) ---
+function semanticParagraphAnalysis(sourceText) {
+  if (!sourceText) return [];
 
-    if (defMatch) {
-      const subject = defMatch[1].trim().replace(/^(Le|La|Les|Un|Une|L'|Le concept de)\s+/i, '');
-      const definition = defMatch[3].trim();
-      if (subject.length >= 3 && !STOP_WORDS.has(subject.toLowerCase()) && definition.length >= 8) {
-        rawPairs.push({ term: subject, def: definition, source: sentence });
-      }
-    } else if (schemaMatch) {
-      const label = `${schemaMatch[1]} ${schemaMatch[2]}`.trim();
-      const desc = schemaMatch[3].trim();
-      rawPairs.push({ term: label, def: desc, source: sentence });
-    } else {
-      const keyConcept = extractKeyConcept(sentence);
-      if (keyConcept) {
-        rawPairs.push({ term: keyConcept, def: sentence, source: sentence });
-      }
+  const rawBlocks = sourceText
+    .split(/\n\s*\n|(?<=[.!?])\s+/)
+    .map((b) => b.replace(/^[-•*0-9.]+\s*/, '').trim())
+    .filter((b) => b.length > 30);
+
+  const semanticPairs = [];
+
+  rawBlocks.forEach((block) => {
+    const sentences = block.split(/(?<=[.!?])\s+/);
+    if (sentences.length === 0) return;
+
+    const mainSentence = sentences[0];
+    const explanation = block;
+
+    const words = mainSentence.replace(/[,;:!?()]/g, '').split(/\s+/);
+    const keyWords = words.filter(w => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()));
+    const concept = keyWords.length > 0 ? keyWords.slice(0, 3).join(' ') : mainSentence.slice(0, 25);
+
+    if (concept.length > 3 && explanation.length > 20) {
+      semanticPairs.push({
+        term: concept.charAt(0).toUpperCase() + concept.slice(1),
+        def: explanation.charAt(0).toUpperCase() + explanation.slice(1),
+        source: block
+      });
     }
   });
 
-  // Dédoublonnage des termes
-  const uniquePairs = [];
-  const seenTerms = new Set();
-  rawPairs.forEach(p => {
-    const lowerTerm = p.term.toLowerCase();
-    if (!seenTerms.has(lowerTerm)) {
-      seenTerms.add(lowerTerm);
-      uniquePairs.push(p);
-    }
-  });
+  return semanticPairs;
+}
+
+function generateAllExercisesLocal(sourceText) {
+  const pairs = semanticParagraphAnalysis(sourceText);
 
   const generatedQuestions = [];
   const generatedFlashcards = [];
   const generatedFillBlanks = [];
 
-  uniquePairs.forEach((pair, index) => {
-    // 1. Flashcards
+  pairs.forEach((pair, index) => {
     generatedFlashcards.push({
       id: index + 1,
-      front: pair.term.charAt(0).toUpperCase() + pair.term.slice(1),
-      back: pair.def.charAt(0).toUpperCase() + pair.def.slice(1)
+      front: pair.term,
+      back: pair.def
     });
 
-    // 2. Phrases à trous
-    const sentenceWithBlank = pair.source.replace(new RegExp(`\\b${pair.term}\\b`, 'gi'), '[___]');
+    const words = pair.term.split(' ');
+    const targetWord = words[words.length - 1];
+    const sentenceWithBlank = pair.source.replace(new RegExp(`\\b${targetWord}\\b`, 'gi'), '[___]');
+
     if (sentenceWithBlank !== pair.source) {
       generatedFillBlanks.push({
         id: index + 1,
         sentenceWithBlank,
-        missingWord: pair.term,
+        missingWord: targetWord,
         explanation: pair.source
       });
     }
 
-    // 3. QCM avec de VRAIS distracteurs pris ailleurs dans le document (subtil & stimulant)
     const correctText = pair.def;
-    const otherDefs = uniquePairs.filter(p => p.term !== pair.term).map(p => p.def);
+    const otherDefs = pairs.filter(p => p.term !== pair.term).map(p => p.def);
     
     let wrongOptions = [];
     while (wrongOptions.length < 3 && otherDefs.length > 0) {
@@ -135,14 +145,13 @@ function generateAllExercisesFromText(sourceText) {
       }
     }
 
-    // Fallback si le texte est court
-    const fallbackWrong = [
-      `Une notion théorique secondaire abordée dans une autre section du cours.`,
-      `Un mécanisme inverse ne s'appliquant pas directement à ${pair.term}.`,
-      `Une confusion fréquente avec les prérequis du chapitre.`
+    const fallbacks = [
+      `Cette notion décrit un phénomène non mentionné dans cette partie du cours.`,
+      `Il s'agit d'une hypothèse écartée par l'analyse du document.`,
+      `Cette définition correspond à un prérequis d'un autre chapitre.`
     ];
     while (wrongOptions.length < 3) {
-      const fb = fallbackWrong[wrongOptions.length];
+      const fb = fallbacks[wrongOptions.length];
       if (!wrongOptions.includes(fb)) wrongOptions.push(fb);
     }
 
@@ -150,32 +159,28 @@ function generateAllExercisesFromText(sourceText) {
 
     generatedQuestions.push({
       id: index + 1,
-      question: `D'après l'analyse du document, que désigne ou caractérise « ${pair.term} » ?`,
+      question: `Que retenir concernant la notion de « ${pair.term} » d'après le document ?`,
       options: allOptions,
       correctAnswer: allOptions.indexOf(correctText),
       explanation: pair.source
     });
   });
 
-  const defaultQ = [{ id: 1, question: "Veuillez fournir un cours plus détaillé.", options: ["OK"], correctAnswer: 0, explanation: "Document trop court." }];
-  const defaultFc = [{ id: 1, front: "Information", back: "Veuillez importer un document complet." }];
-  const defaultFb = [{ id: 1, sentenceWithBlank: "Document [___].", missingWord: "vide", explanation: "Aucun texte." }];
-
   return {
-    questions: generatedQuestions.length > 0 ? generatedQuestions : defaultQ,
-    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : defaultFc,
-    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : defaultFb
+    questions: generatedQuestions,
+    flashcards: generatedFlashcards,
+    fillBlanks: generatedFillBlanks
   };
 }
 
 function buildSessionSteps(questions, flashcards, fillBlanks) {
   const steps = [];
-  flashcards.slice(0, 4).forEach((fc) => steps.push({ type: 'flashcard', data: fc }));
+  if (flashcards) flashcards.slice(0, 4).forEach((fc) => steps.push({ type: 'flashcard', data: fc }));
 
-  const maxInter = Math.max(questions.length, fillBlanks.length);
+  const maxInter = Math.max(questions ? questions.length : 0, fillBlanks ? fillBlanks.length : 0);
   for (let i = 0; i < maxInter; i++) {
-    if (questions[i]) steps.push({ type: 'quiz', data: questions[i] });
-    if (fillBlanks[i]) steps.push({ type: 'fillblank', data: fillBlanks[i] });
+    if (questions && questions[i]) steps.push({ type: 'quiz', data: questions[i] });
+    if (fillBlanks && fillBlanks[i]) steps.push({ type: 'fillblank', data: fillBlanks[i] });
   }
   return steps;
 }
@@ -192,6 +197,7 @@ export default function App() {
   const [flashcards, setFlashcards] = useState([]);
   const [fillBlanks, setFillBlanks] = useState([]);
   const [rawInputText, setRawInputText] = useState('');
+  const [apiKey, setApiKey] = useState('');
 
   const [sessionSteps, setSessionSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
@@ -224,10 +230,18 @@ export default function App() {
 
       const decks = localStorage.getItem('studysnap_decks');
       if (decks) setSavedDecks(JSON.parse(decks));
+
+      const savedKey = localStorage.getItem('studysnap_apikey');
+      if (savedKey) setApiKey(savedKey);
     } catch (e) {
       console.error(e);
     }
   }, []);
+
+  const handleSaveApiKey = (key) => {
+    setApiKey(key);
+    localStorage.setItem('studysnap_apikey', key);
+  };
 
   const saveHistory = useCallback((result) => {
     setHistory((prev) => {
@@ -370,36 +384,45 @@ export default function App() {
     }
   };
 
-  const handleProcessText = (text) => {
+  const handleProcessText = async (text) => {
     setUploadError(null);
     if (!text || !text.trim()) {
       setUploadError("Le texte fourni est trop court ou vide.");
       return;
     }
     setIsAnalyzing(true);
-    setTimeout(() => {
-      try {
-        const generated = generateAllExercisesFromText(text);
-        setQuestions(generated.questions);
-        setFlashcards(generated.flashcards);
-        setFillBlanks(generated.fillBlanks);
 
-        saveDeckToStorage(
-          text.slice(0, 25) + '...',
-          selectedSubject,
-          generated.questions,
-          generated.flashcards,
-          generated.fillBlanks
-        );
-
-        setIsAnalyzing(false);
-        startSession(generated.questions, generated.flashcards, generated.fillBlanks);
-      } catch (e) {
-        console.error(e);
-        setUploadError("Une erreur est survenue lors de l'analyse globale.");
-        setIsAnalyzing(false);
+    try {
+      let generated;
+      if (apiKey && apiKey.trim().length > 10) {
+        setOcrProgress("Formulation intelligente via l'IA Externe...");
+        generated = await generateExercisesWithExternalAI(text, apiKey);
+      } else {
+        setOcrProgress("Analyse locale sémantique...");
+        generated = generateAllExercisesLocal(text);
       }
-    }, 300);
+
+      setQuestions(generated.questions || []);
+      setFlashcards(generated.flashcards || []);
+      setFillBlanks(generated.fillBlanks || []);
+
+      saveDeckToStorage(
+        text.slice(0, 25) + '...',
+        selectedSubject,
+        generated.questions || [],
+        generated.flashcards || [],
+        generated.fillBlanks || []
+      );
+
+      setIsAnalyzing(false);
+      setOcrProgress('');
+      startSession(generated.questions, generated.flashcards, generated.fillBlanks);
+    } catch (e) {
+      console.error(e);
+      setUploadError(e.message || "Erreur de génération avec l'IA. Bascule locale recommandée.");
+      setIsAnalyzing(false);
+      setOcrProgress('');
+    }
   };
 
   const startCamera = async () => {
@@ -435,7 +458,7 @@ export default function App() {
 
   const processImageOCR = async (imageSrc) => {
     setIsAnalyzing(true);
-    setOcrProgress("Analyse globale des schémas & texte de la photo...");
+    setOcrProgress("Extraction du texte de la photo...");
 
     try {
       if (!window.Tesseract) {
@@ -450,13 +473,13 @@ export default function App() {
       await worker.terminate();
 
       const text = ret.data.text;
-      if (!text || !text.trim()) throw new Error("Aucun texte ou schéma lisible trouvé.");
+      if (!text || !text.trim()) throw new Error("Aucun texte lisible trouvé.");
 
       setRawInputText(text);
       setOcrProgress('');
-      handleProcessText(text);
+      await handleProcessText(text);
     } catch (err) {
-      setUploadError(err.message || "Erreur de lecture de l'image.");
+      setUploadError(err.message || "Erreur lors de la lecture.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -471,7 +494,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction complète du PDF (toutes les pages)...");
+        setOcrProgress("Extraction du PDF...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -497,21 +520,21 @@ export default function App() {
 
         setRawInputText(fullText);
         setOcrProgress('');
-        handleProcessText(fullText);
+        await handleProcessText(fullText);
       } else if (file.type.startsWith('image/')) {
         const reader = new FileReader();
         reader.onload = (e) => processImageOCR(e.target.result);
         reader.readAsDataURL(file);
       } else {
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
           setRawInputText(e.target?.result);
-          handleProcessText(e.target?.result);
+          await handleProcessText(e.target?.result);
         };
         reader.readAsText(file);
       }
     } catch (err) {
-      setUploadError(err.message || "Erreur lors du traitement du fichier.");
+      setUploadError(err.message || "Erreur lors du traitement.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -524,7 +547,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.2</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.4 (IA Direct)</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -545,8 +568,27 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Analyse globale de tout le document</h2>
-                <p className="text-slate-600 text-sm mt-1">Le contenu des pages et des schémas est extrait pour créer des QCM stimulants et exigeants.</p>
+                <h2 className="text-2xl font-bold text-slate-900">IA & Génération Pédagogique</h2>
+                <p className="text-slate-600 text-sm mt-1">L'IA analyse le document pour formaliser des exercices riches et réalistes.</p>
+              </div>
+
+              {/* Champ Clé API OpenAI / Gemini */}
+              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 space-y-2">
+                <div className="flex items-center space-x-2">
+                  <Cpu className="w-4 h-4 text-indigo-600" />
+                  <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Génération IA Externe (Optionnelle)</span>
+                </div>
+                <div className="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-slate-200">
+                  <Key className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => handleSaveApiKey(e.target.value)}
+                    placeholder="Clé API OpenAI (ex: sk-...)"
+                    className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500 italic">Si aucune clé n'est saisie, l'application utilise automatiquement le moteur local sémantique.</p>
               </div>
 
               <div className="space-y-2">
@@ -577,7 +619,7 @@ export default function App() {
               <div className="border-t border-slate-100 my-2"></div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner l'ensemble du document (PDF ou Photo)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner le document (PDF / Photo / Image)</label>
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
                     <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
@@ -594,7 +636,7 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <button onClick={startCamera} className="p-4 border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/50 rounded-xl flex flex-col items-center justify-center transition">
                       <Camera className="w-6 h-6 text-indigo-600 mb-1" />
-                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo du schéma/cours</span>
+                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo du cours</span>
                     </button>
                     <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
                       <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
@@ -620,7 +662,7 @@ export default function App() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
                 >
                   <Sparkles className="w-5 h-5 text-amber-300" />
-                  <span>{isAnalyzing ? (ocrProgress || "Génération des questions stimulantes...") : "Lancer le Parcours de Révision"}</span>
+                  <span>{isAnalyzing ? (ocrProgress || "Génération des exercices...") : "Générer avec l'IA & Lancer le Parcours"}</span>
                 </button>
               </div>
 
@@ -698,11 +740,11 @@ export default function App() {
                   </div>
                 )}
 
-                {/* QCM AVEC CHOIX SUBTILS */}
+                {/* QCM IA */}
                 {currentStep.type === 'quiz' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full">Question QCM Avancée</span>
+                      <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full">Question QCM IA</span>
                       <div className="flex items-center space-x-2">
                         <button onClick={() => speakText(currentStep.data.question)} className="p-1.5 text-slate-500 hover:text-indigo-600">
                           <Volume2 className="w-4 h-4" />
@@ -740,7 +782,7 @@ export default function App() {
 
                     {stepResultState !== null && (
                       <div className="p-4 bg-slate-50 rounded-xl text-xs text-slate-600 border border-slate-100">
-                        <p className="font-semibold text-slate-800 mb-1">Extrait source de référence :</p>
+                        <p className="font-semibold text-slate-800 mb-1">Explication :</p>
                         {currentStep.data.explanation}
                       </div>
                     )}
@@ -800,7 +842,7 @@ export default function App() {
               <div className="text-center py-6 space-y-6">
                 <Award className="w-16 h-16 text-amber-500 mx-auto" />
                 <h2 className="text-2xl font-bold text-slate-800">
-                  {lives > 0 ? "Session terminée avec succès !" : "Plus de vies disponible !"}
+                  {lives > 0 ? "Session réussie !" : "Plus de vies !"}
                 </h2>
                 
                 <div className="bg-indigo-50 p-6 rounded-2xl inline-block space-y-2">
@@ -824,7 +866,7 @@ export default function App() {
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
               <h2 className="text-xl font-bold text-slate-800 mb-4">Mes Decks Enregistrés</h2>
               {savedDecks.length === 0 ? (
-                <p className="text-slate-500 text-sm">Aucun deck sauvegardé. Importez un cours pour démarrer.</p>
+                <p className="text-slate-500 text-sm">Aucun deck sauvegardé.</p>
               ) : (
                 <div className="space-y-3">
                   {savedDecks.map((deck) => (
@@ -832,7 +874,7 @@ export default function App() {
                       <div>
                         <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full">{deck.subject}</span>
                         <h4 className="text-sm font-semibold text-slate-800 mt-1">{deck.title}</h4>
-                        <p className="text-xs text-slate-400">Créé le {deck.date} • {deck.questions.length} étapes</p>
+                        <p className="text-xs text-slate-400">Créé le {deck.date} • {deck.questions ? deck.questions.length : 0} étapes</p>
                       </div>
                       <div className="flex items-center space-x-2">
                         <button onClick={() => handleLoadDeck(deck)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium flex items-center space-x-1">
