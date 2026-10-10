@@ -4,33 +4,6 @@ import {
   RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic, Camera, Folder, Trash2, Plus
 } from 'lucide-react';
 
-// --- EXTRACTION DE TEXTE DEPUIS UN PDF VIA CDN ---
-const extractTextFromPdf = async (file) => {
-  if (!window.pdfjsLib) {
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-    document.head.appendChild(script);
-    await new Promise((resolve, reject) => {
-      script.onload = resolve;
-      script.onerror = reject;
-    });
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  }
-
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = '';
-
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const tokenized = await page.getTextContent();
-    const pageText = tokenized.items.map((item) => item.str).join(' ');
-    fullText += pageText + '\n';
-  }
-
-  return fullText;
-};
-
 // --- DONNÉES PAR DÉFAUT ---
 const DEFAULT_QUESTIONS = [
   {
@@ -77,21 +50,24 @@ const speakText = (text) => {
   }
 };
 
+// --- MOTEUR DE GÉNÉRATION SÉCURISÉ & UNIVERSEL ---
 function generateAllExercisesFromText(sourceText) {
+  // Nettoyage et découpage par phrases ou par lignes
   const rawSentences = sourceText
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 20);
+    .split(/(?:[.!?\n]+)/)
+    .map((s) => s.replace(/^[-•*]\s*/, '').trim())
+    .filter((s) => s.length > 10);
 
   const generatedQuestions = [];
   const generatedFlashcards = [];
   const generatedFillBlanks = [];
 
   rawSentences.forEach((sentence, index) => {
+    // 1. Détection de définitions
     const match = sentence.match(/(.+?)\s+(est|sont|désigne|représente|permet de|s'explique par)\s+(.+)/i);
 
-    if (match) {
-      const subject = match[1].replace(/^[-•*]\s*/, '').trim();
+    if (match && generatedQuestions.length < 10) {
+      const subject = match[1].trim();
       const definition = match[3].trim();
 
       const correctText = definition;
@@ -132,34 +108,44 @@ function generateAllExercisesFromText(sourceText) {
     }
   });
 
+  // 2. Mode universel de secours si aucune définition stricte n'a été détectée
   if (generatedQuestions.length === 0 && rawSentences.length > 0) {
-    rawSentences.slice(0, 5).forEach((sentence, i) => {
-      generatedFlashcards.push({ id: i + 1, front: `Point clé n°${i + 1}`, back: sentence });
-      
+    const subset = rawSentences.slice(0, 6);
+    subset.forEach((sentence, i) => {
       const words = sentence.split(' ');
-      const keyWord = words.find(w => w.length > 5) || words[0];
-      
+      const keyWord = words.find((w) => w.length > 5) || words[0] || 'Concept';
+      const cleanKeyWord = keyWord.replace(/[,.;:!?()]/g, '');
+
+      // Flashcard
+      generatedFlashcards.push({
+        id: i + 1,
+        front: cleanKeyWord,
+        back: sentence
+      });
+
+      // Phrase à trous
+      const sentenceWithBlank = sentence.replace(cleanKeyWord, '[___]');
       generatedFillBlanks.push({
         id: i + 1,
-        sentenceWithBlank: sentence.replace(keyWord, '[___]'),
-        missingWord: keyWord.replace(/[,.]/g, ''),
+        sentenceWithBlank: sentenceWithBlank !== sentence ? sentenceWithBlank : `[___] : ${sentence}`,
+        missingWord: cleanKeyWord,
         explanation: sentence
       });
 
+      // QCM
       const correctText = sentence;
       const wrongOptions = [
-        "Cette affirmation est fausse d'après le document.",
-        "Information non mentionnée dans le cours.",
-        "Aucune de ces propositions n'est correcte."
+        "Cette affirmation n'est pas mentionnée dans le cours.",
+        "Il s'agit d'une interprétation incorrecte de la notion.",
+        "Aucune de ces affirmations n'est exacte."
       ];
       const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
-      const correctIndex = allOptions.indexOf(correctText);
 
       generatedQuestions.push({
         id: i + 1,
-        question: `Extrait du cours : quelle est l'affirmation exacte ?`,
+        question: `D'après votre cours, quelle affirmation relative à « ${cleanKeyWord} » est exacte ?`,
         options: allOptions,
-        correctAnswer: correctIndex,
+        correctAnswer: allOptions.indexOf(correctText),
         explanation: sentence
       });
     });
@@ -308,7 +294,10 @@ export default function App() {
   }, [isTimerActive, timeLeft, isQuizFinished, activeTab, handleNextQuestion]);
 
   const startQuiz = (customQ) => {
-    if (customQ) setQuestions(customQ);
+    const targetQuestions = customQ || questions;
+    if (targetQuestions && targetQuestions.length > 0) {
+      setQuestions(targetQuestions);
+    }
     setCurrentQuestionIndex(0);
     setScore(0);
     setIsQuizFinished(false);
@@ -328,28 +317,34 @@ export default function App() {
 
   const handleProcessText = (text) => {
     setUploadError(null);
-    if (!text.trim()) {
+    if (!text || !text.trim()) {
       setUploadError("Le contenu du texte est vide.");
       return;
     }
     setIsAnalyzing(true);
     setTimeout(() => {
-      const generated = generateAllExercisesFromText(text);
-      setQuestions(generated.questions);
-      setFlashcards(generated.flashcards);
-      setFillBlanks(generated.fillBlanks);
-      
-      saveDeckToStorage(
-        text.slice(0, 25) + '...',
-        selectedSubject,
-        generated.questions,
-        generatedFlashcards,
-        generated.fillBlanks
-      );
+      try {
+        const generated = generateAllExercisesFromText(text);
+        setQuestions(generated.questions);
+        setFlashcards(generated.flashcards);
+        setFillBlanks(generated.fillBlanks);
+        
+        saveDeckToStorage(
+          text.slice(0, 25) + '...',
+          selectedSubject,
+          generated.questions,
+          generated.flashcards,
+          generated.fillBlanks
+        );
 
-      setIsAnalyzing(false);
-      startQuiz(generated.questions);
-    }, 400);
+        setIsAnalyzing(false);
+        startQuiz(generated.questions);
+      } catch (e) {
+        console.error(e);
+        setUploadError("Une erreur est survenue lors du traitement du texte.");
+        setIsAnalyzing(false);
+      }
+    }, 300);
   };
 
   const startCamera = async () => {
@@ -400,8 +395,8 @@ export default function App() {
       await worker.terminate();
 
       const text = ret.data.text;
-      if (!text.trim()) {
-        throw new Error("Aucun texte trouvé dans l'image.");
+      if (!text || !text.trim()) {
+        throw new Error("Aucun texte lisible n'a été trouvé dans l'image.");
       }
 
       setRawInputText(text);
@@ -414,7 +409,6 @@ export default function App() {
     }
   };
 
-  // --- HOULETTE POUR FICHIERS PDF, IMAGE ET TEXTE ---
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     setUploadError(null);
@@ -424,14 +418,36 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction du texte PDF en cours...");
-        const extractedText = await extractTextFromPdf(file);
-        if (!extractedText.trim()) {
-          throw new Error("Le PDF semble être un document scanné sous forme d'image sans texte sélectionnable.");
+        setOcrProgress("Lecture du PDF...");
+        if (!window.pdfjsLib) {
+          const script = document.createElement('script');
+          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+          document.head.appendChild(script);
+          await new Promise((resolve, reject) => {
+            script.onload = resolve;
+            script.onerror = reject;
+          });
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         }
-        setRawInputText(extractedText);
+
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = '';
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const tokenized = await page.getTextContent();
+          const pageText = tokenized.items.map((item) => item.str).join(' ');
+          fullText += pageText + '\n';
+        }
+
+        if (!fullText.trim()) {
+          throw new Error("Le PDF est vide ou est un document scanné sous forme d'image.");
+        }
+
+        setRawInputText(fullText);
         setOcrProgress('');
-        handleProcessText(extractedText);
+        handleProcessText(fullText);
       } else if (file.type.startsWith('image/')) {
         const reader = new FileReader();
         reader.onload = (e) => processImageOCR(e.target.result);
