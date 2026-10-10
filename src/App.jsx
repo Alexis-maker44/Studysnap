@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
-  RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic, Camera, Folder, Trash2, Plus
+  RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic, Camera, Folder, Trash2, Plus, ArrowRightLeft
 } from 'lucide-react';
 
 // --- DONNÉES PAR DÉFAUT ---
@@ -28,8 +28,8 @@ const DEFAULT_QUESTIONS = [
 ];
 
 const DEFAULT_FLASHCARDS = [
-  { id: 1, front: "JSX", back: "Extension de syntaxe JavaScript pour React" },
-  { id: 2, front: "Props", back: "Arguments transmis aux composants React" }
+  { id: 1, front: "JSX", back: "Extension de syntaxe JavaScript permettant d'écrire du HTML dans React." },
+  { id: 2, front: "Props", back: "Arguments et données transmis de composant en composant." }
 ];
 
 const DEFAULT_FILLBLANKS = [
@@ -50,55 +50,87 @@ const speakText = (text) => {
   }
 };
 
-// --- MOTEUR DE GÉNÉRATION SÉCURISÉ & UNIVERSEL ---
+// --- MOTEUR DE GÉNÉRATION INTELLIGENT POUR FLASHCARDS & QUIZ ---
 function generateAllExercisesFromText(sourceText) {
-  // Nettoyage et découpage par phrases ou par lignes
+  const rawLines = sourceText
+    .split(/(?:\r?\n)+/)
+    .map((l) => l.replace(/^[-•*]\s*/, '').trim())
+    .filter((l) => l.length > 5);
+
   const rawSentences = sourceText
     .split(/(?:[.!?\n]+)/)
     .map((s) => s.replace(/^[-•*]\s*/, '').trim())
-    .filter((s) => s.length > 10);
+    .filter((s) => s.length > 15);
 
   const generatedQuestions = [];
   const generatedFlashcards = [];
   const generatedFillBlanks = [];
 
-  rawSentences.forEach((sentence, index) => {
-    // 1. Détection de définitions
-    const match = sentence.match(/(.+?)\s+(est|sont|désigne|représente|permet de|s'explique par)\s+(.+)/i);
+  // STRATÉGIE 1 : Extraction depuis des lignes structurées (Terme : Définition)
+  rawLines.forEach((line) => {
+    const colonMatch = line.match(/^(.+?)\s*[:=–-]\s*(.+)$/);
+    if (colonMatch) {
+      const term = colonMatch[1].trim();
+      const def = colonMatch[2].trim();
 
-    if (match && generatedQuestions.length < 10) {
-      const subject = match[1].trim();
-      const definition = match[3].trim();
+      if (term.length > 1 && term.length < 40 && def.length > 5) {
+        generatedFlashcards.push({
+          id: generatedFlashcards.length + 1,
+          front: term,
+          back: def
+        });
 
-      const correctText = definition;
-      const wrongOptions = [
-        `Une méthode alternative non liée à ${subject}.`,
-        `Un concept obsolète dans ce domaine.`,
-        `Une erreur de configuration fréquente.`
-      ];
+        // Générer aussi une phrase à trous si pertinent
+        generatedFillBlanks.push({
+          id: generatedFillBlanks.length + 1,
+          sentenceWithBlank: `${term} : [___]`,
+          missingWord: def.split(' ')[0],
+          explanation: line
+        });
+      }
+    }
+  });
 
-      const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
-      const correctIndex = allOptions.indexOf(correctText);
+  // STRATÉGIE 2 : Extraction par expressions de définition (est, désigne, signifie...)
+  rawSentences.forEach((sentence) => {
+    const defMatch = sentence.match(/(.+?)\s+(est|sont|désigne|représente|permet de|signifie|consiste à)\s+(.+)/i);
 
-      generatedQuestions.push({
-        id: index + 1,
-        question: `Que désigne le terme ou concept « ${subject} » ?`,
-        options: allOptions,
-        correctAnswer: correctIndex,
-        explanation: sentence
-      });
+    if (defMatch) {
+      const subject = defMatch[1].trim();
+      const definition = defMatch[3].trim();
 
-      generatedFlashcards.push({
-        id: index + 1,
-        front: subject,
-        back: definition
-      });
+      if (subject.length > 2 && subject.length < 45 && definition.length > 10) {
+        // Ajouter aux Flashcards si pas déjà présent
+        if (!generatedFlashcards.some(f => f.front.toLowerCase() === subject.toLowerCase())) {
+          generatedFlashcards.push({
+            id: generatedFlashcards.length + 1,
+            front: subject,
+            back: definition.charAt(0).toUpperCase() + definition.slice(1)
+          });
+        }
 
-      if (subject.length > 3 && subject.length < 25) {
+        // QCM
+        const correctText = definition;
+        const wrongOptions = [
+          `Une méthode ou propriété totalement opposée à ${subject}.`,
+          `Un concept secondaire n'ayant aucun lien direct avec ${subject}.`,
+          `Une erreur de formulation fréquemment rencontrée.`
+        ];
+        const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
+
+        generatedQuestions.push({
+          id: generatedQuestions.length + 1,
+          question: `Quelle est la définition exacte du concept « ${subject} » ?`,
+          options: allOptions,
+          correctAnswer: allOptions.indexOf(correctText),
+          explanation: sentence
+        });
+
+        // Phrase à trous
         const sentenceWithBlank = sentence.replace(new RegExp(subject, 'gi'), '[___]');
         if (sentenceWithBlank !== sentence) {
           generatedFillBlanks.push({
-            id: index + 1,
+            id: generatedFillBlanks.length + 1,
             sentenceWithBlank,
             missingWord: subject,
             explanation: sentence
@@ -108,45 +140,53 @@ function generateAllExercisesFromText(sourceText) {
     }
   });
 
-  // 2. Mode universel de secours si aucune définition stricte n'a été détectée
-  if (generatedQuestions.length === 0 && rawSentences.length > 0) {
-    const subset = rawSentences.slice(0, 6);
-    subset.forEach((sentence, i) => {
-      const words = sentence.split(' ');
-      const keyWord = words.find((w) => w.length > 5) || words[0] || 'Concept';
-      const cleanKeyWord = keyWord.replace(/[,.;:!?()]/g, '');
+  // STRATÉGIE 3 : Secours pour textes denses sans verbes de définition
+  if (generatedFlashcards.length < 3 && rawSentences.length > 0) {
+    rawSentences.slice(0, 6).forEach((sentence) => {
+      const parts = sentence.split(',');
+      if (parts.length >= 2) {
+        const concept = parts[0].trim();
+        const detail = parts.slice(1).join(',').trim();
+        if (concept.length < 35 && detail.length > 10) {
+          generatedFlashcards.push({
+            id: generatedFlashcards.length + 1,
+            front: concept,
+            back: detail
+          });
+        }
+      } else {
+        // Découpe sujet/prédicat
+        const words = sentence.split(' ');
+        if (words.length > 5) {
+          const concept = words.slice(0, 3).join(' ');
+          const detail = words.slice(3).join(' ');
+          generatedFlashcards.push({
+            id: generatedFlashcards.length + 1,
+            front: concept,
+            back: detail
+          });
+        }
+      }
+    });
+  }
 
-      // Flashcard
-      generatedFlashcards.push({
-        id: i + 1,
-        front: cleanKeyWord,
-        back: sentence
-      });
-
-      // Phrase à trous
-      const sentenceWithBlank = sentence.replace(cleanKeyWord, '[___]');
-      generatedFillBlanks.push({
-        id: i + 1,
-        sentenceWithBlank: sentenceWithBlank !== sentence ? sentenceWithBlank : `[___] : ${sentence}`,
-        missingWord: cleanKeyWord,
-        explanation: sentence
-      });
-
-      // QCM
-      const correctText = sentence;
+  // Secours pour Quiz si vide
+  if (generatedQuestions.length === 0 && generatedFlashcards.length > 0) {
+    generatedFlashcards.forEach((fc, i) => {
+      const correctText = fc.back;
       const wrongOptions = [
-        "Cette affirmation n'est pas mentionnée dans le cours.",
-        "Il s'agit d'une interprétation incorrecte de la notion.",
-        "Aucune de ces affirmations n'est exacte."
+        "Définition incorrecte d'un autre sujet.",
+        "Énoncé faussé d'après le texte source.",
+        "Aucune de ces propositions."
       ];
       const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
 
       generatedQuestions.push({
         id: i + 1,
-        question: `D'après votre cours, quelle affirmation relative à « ${cleanKeyWord} » est exacte ?`,
+        question: `Que désigne « ${fc.front} » ?`,
         options: allOptions,
         correctAnswer: allOptions.indexOf(correctText),
-        explanation: sentence
+        explanation: `${fc.front} : ${fc.back}`
       });
     });
   }
@@ -170,6 +210,9 @@ export default function App() {
   const [flashcards, setFlashcards] = useState(DEFAULT_FLASHCARDS);
   const [fillBlanks, setFillBlanks] = useState(DEFAULT_FILLBLANKS);
   const [rawInputText, setRawInputText] = useState('');
+
+  // Mode d'affichage Flashcards (Terme -> Définition ou Définition -> Terme)
+  const [cardDirection, setCardDirection] = useState('term-to-def'); // 'term-to-def' ou 'def-to-term'
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState(null);
@@ -484,7 +527,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v2.1</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v2.2</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -506,6 +549,7 @@ export default function App() {
       </header>
 
       <main className="max-w-3xl mx-auto p-4 md:p-6">
+        {/* 1. ACCUEIL */}
         {activeTab === 'home' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
@@ -572,7 +616,7 @@ export default function App() {
                 <textarea
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Collez le texte du cours ici..."
+                  placeholder="Collez le texte du cours ici (Astuce: vous pouvez utiliser le format 'Terme : Définition')..."
                   rows={3}
                   className="w-full p-3 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
@@ -723,14 +767,39 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. MODE FLASHCARDS */}
+        {/* 4. MODE FLASHCARDS (AVEC INVERSION RECTO/VERSO) */}
         {activeTab === 'flashcards' && (
           <div className="max-w-md mx-auto space-y-6">
-            <div onClick={() => setIsFlipped(!isFlipped)} className="bg-white border border-slate-200 rounded-2xl p-8 h-64 flex flex-col items-center justify-center text-center cursor-pointer shadow-sm hover:shadow-md transition relative select-none">
-              <span className="absolute top-4 right-4 text-xs font-semibold text-slate-400">{isFlipped ? "RÉPONSE" : "RECTO"}</span>
-              <p className="text-lg font-semibold text-slate-800">{isFlipped ? flashcards[cardIndex]?.back : flashcards[cardIndex]?.front}</p>
+            <div className="flex justify-between items-center">
+              <button 
+                onClick={() => setCardDirection(cardDirection === 'term-to-def' ? 'def-to-term' : 'term-to-def')}
+                className="text-xs bg-indigo-50 text-indigo-600 font-semibold px-3 py-1.5 rounded-lg border border-indigo-100 flex items-center space-x-1 hover:bg-indigo-100 transition"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+                <span>Mode : {cardDirection === 'term-to-def' ? 'Concept ➔ Définition' : 'Définition ➔ Concept'}</span>
+              </button>
+              <button onClick={() => speakText(isFlipped ? (cardDirection === 'term-to-def' ? flashcards[cardIndex]?.back : flashcards[cardIndex]?.front) : (cardDirection === 'term-to-def' ? flashcards[cardIndex]?.front : flashcards[cardIndex]?.back))} className="p-1.5 text-slate-500 hover:text-indigo-600">
+                <Volume2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div 
+              onClick={() => setIsFlipped(!isFlipped)} 
+              className="bg-white border border-slate-200 rounded-2xl p-8 h-64 flex flex-col items-center justify-center text-center cursor-pointer shadow-sm hover:shadow-md transition relative select-none"
+            >
+              <span className="absolute top-4 right-4 text-xs font-semibold text-slate-400">
+                {isFlipped ? "RÉPONSE" : "QUESTION"}
+              </span>
+
+              <p className="text-lg font-semibold text-slate-800">
+                {cardDirection === 'term-to-def' 
+                  ? (isFlipped ? flashcards[cardIndex]?.back : flashcards[cardIndex]?.front)
+                  : (isFlipped ? flashcards[cardIndex]?.front : flashcards[cardIndex]?.back)
+                }
+              </p>
               <p className="text-xs text-slate-400 mt-6">(Cliquer pour retourner)</p>
             </div>
+
             <div className="flex justify-between items-center">
               <button disabled={cardIndex === 0} onClick={() => { setIsFlipped(false); setCardIndex(p => p - 1); }} className="p-2 border border-slate-200 rounded-lg disabled:opacity-30 hover:bg-slate-100">
                 <ChevronLeft className="w-5 h-5" />
