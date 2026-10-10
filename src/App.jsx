@@ -1,42 +1,10 @@
-'use client';
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic 
 } from 'lucide-react';
 
-type ActiveTab = 'home' | 'quiz' | 'flashcards' | 'fillblank' | 'history';
-
-interface Question {
-  id: number;
-  question: string;
-  options: string[];
-  correctAnswer: number;
-  explanation: string;
-}
-
-interface Flashcard {
-  id: number;
-  front: string;
-  back: string;
-}
-
-interface FillInTheBlank {
-  id: number;
-  sentenceWithBlank: string;
-  missingWord: string;
-  explanation: string;
-}
-
-interface QuizResult {
-  date: string;
-  score: number;
-  total: number;
-  percentage: number;
-}
-
-const DEFAULT_QUESTIONS: Question[] = [
+const DEFAULT_QUESTIONS = [
   {
     id: 1,
     question: "Quelle est la principale fonction d'un hook useState en React ?",
@@ -58,12 +26,12 @@ const DEFAULT_QUESTIONS: Question[] = [
   }
 ];
 
-const DEFAULT_FLASHCARDS: Flashcard[] = [
+const DEFAULT_FLASHCARDS = [
   { id: 1, front: "JSX", back: "Extension de syntaxe JavaScript pour React" },
   { id: 2, front: "Props", back: "Arguments transmis aux composants React" }
 ];
 
-const DEFAULT_FILLBLANKS: FillInTheBlank[] = [
+const DEFAULT_FILLBLANKS = [
   {
     id: 1,
     sentenceWithBlank: "Le hook [___] permet d'ajouter un état local à un composant fonctionnel.",
@@ -72,7 +40,7 @@ const DEFAULT_FILLBLANKS: FillInTheBlank[] = [
   }
 ];
 
-const speakText = (text: string) => {
+const speakText = (text) => {
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
@@ -81,15 +49,15 @@ const speakText = (text: string) => {
   }
 };
 
-function generateAllExercisesFromText(sourceText: string) {
+function generateAllExercisesFromText(sourceText) {
   const rawSentences = sourceText
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 20);
 
-  const generatedQuestions: Question[] = [];
-  const generatedFlashcards: Flashcard[] = [];
-  const generatedFillBlanks: FillInTheBlank[] = [];
+  const generatedQuestions = [];
+  const generatedFlashcards = [];
+  const generatedFillBlanks = [];
 
   rawSentences.forEach((sentence, index) => {
     const match = sentence.match(/(.+?)\s+(est|sont|désigne|représente|permet de|s'explique par)\s+(.+)/i);
@@ -176,18 +144,18 @@ function generateAllExercisesFromText(sourceText: string) {
   };
 }
 
-export default function StudySnapApp() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('home');
-  const [questions, setQuestions] = useState<Question[]>(DEFAULT_QUESTIONS);
-  const [flashcards, setFlashcards] = useState<Flashcard[]>(DEFAULT_FLASHCARDS);
-  const [fillBlanks, setFillBlanks] = useState<FillInTheBlank[]>(DEFAULT_FILLBLANKS);
+export default function App() {
+  const [activeTab, setActiveTab] = useState('home');
+  const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
+  const [flashcards, setFlashcards] = useState(DEFAULT_FLASHCARDS);
+  const [fillBlanks, setFillBlanks] = useState(DEFAULT_FILLBLANKS);
   const [rawInputText, setRawInputText] = useState('');
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
+  const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [score, setScore] = useState(0);
   const [isQuizFinished, setIsQuizFinished] = useState(false);
-  const [timeLeft, setTimeLeft] = useState<number>(30);
+  const [timeLeft, setTimeLeft] = useState(30);
   const [isTimerActive, setIsTimerActive] = useState(false);
 
   const [cardIndex, setCardIndex] = useState(0);
@@ -195,11 +163,11 @@ export default function StudySnapApp() {
 
   const [fillIndex, setFillIndex] = useState(0);
   const [userBlankInput, setUserBlankInput] = useState('');
-  const [fillResultState, setFillResultState] = useState<'correct' | 'incorrect' | null>(null);
+  const [fillResultState, setFillResultState] = useState(null);
 
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [history, setHistory] = useState<QuizResult[]>([]);
+  const [history, setHistory] = useState([]);
 
   useEffect(() => {
     try {
@@ -210,7 +178,7 @@ export default function StudySnapApp() {
     }
   }, []);
 
-  const saveHistory = useCallback((result: QuizResult) => {
+  const saveHistory = useCallback((result) => {
     setHistory((prev) => {
       const updated = [result, ...prev];
       localStorage.setItem('studysnap_history', JSON.stringify(updated));
@@ -244,7 +212,7 @@ export default function StudySnapApp() {
   }, [questions.length, saveHistory]);
 
   useEffect(() => {
-    let timer: ReturnType<typeof setInterval>;
+    let timer;
     if (isTimerActive && timeLeft > 0 && !isQuizFinished && activeTab === 'quiz') {
       timer = setInterval(() => setTimeLeft((p) => p - 1), 1000);
     } else if (timeLeft === 0 && isTimerActive && !isQuizFinished) {
@@ -253,7 +221,7 @@ export default function StudySnapApp() {
     return () => clearInterval(timer);
   }, [isTimerActive, timeLeft, isQuizFinished, activeTab, handleNextQuestion]);
 
-  const startQuiz = (customQ?: Question[]) => {
+  const startQuiz = (customQ) => {
     if (customQ) setQuestions(customQ);
     setCurrentQuestionIndex(0);
     setScore(0);
@@ -264,7 +232,7 @@ export default function StudySnapApp() {
     setActiveTab('quiz');
   };
 
-  const handleAnswerSelect = (idx: number) => {
+  const handleAnswerSelect = (idx) => {
     if (selectedAnswer !== null) return;
     setSelectedAnswer(idx);
     if (idx === questions[currentQuestionIndex]?.correctAnswer) {
@@ -272,7 +240,7 @@ export default function StudySnapApp() {
     }
   };
 
-  const handleProcessText = (text: string) => {
+  const handleProcessText = (text) => {
     setUploadError(null);
     if (!text.trim()) {
       setUploadError("Le contenu du texte est vide.");
@@ -289,7 +257,7 @@ export default function StudySnapApp() {
     }, 400);
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     setUploadError(null);
     if (!file) return;
@@ -299,7 +267,7 @@ export default function StudySnapApp() {
     try {
       const reader = new FileReader();
       reader.onload = (e) => {
-        const content = e.target?.result as string;
+        const content = e.target?.result;
         if (file.name.endsWith('.json')) {
           try {
             const parsed = JSON.parse(content);
