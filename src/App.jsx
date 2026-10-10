@@ -4,6 +4,33 @@ import {
   RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic, Camera, Folder, Trash2, Plus
 } from 'lucide-react';
 
+// --- EXTRACTION DE TEXTE DEPUIS UN PDF VIA CDN ---
+const extractTextFromPdf = async (file) => {
+  if (!window.pdfjsLib) {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    document.head.appendChild(script);
+    await new Promise((resolve, reject) => {
+      script.onload = resolve;
+      script.onerror = reject;
+    });
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = '';
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const tokenized = await page.getTextContent();
+    const pageText = tokenized.items.map((item) => item.str).join(' ');
+    fullText += pageText + '\n';
+  }
+
+  return fullText;
+};
+
 // --- DONNÉES PAR DÉFAUT ---
 const DEFAULT_QUESTIONS = [
   {
@@ -148,19 +175,16 @@ function generateAllExercisesFromText(sourceText) {
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   
-  // Gestion des matières et decks enregistrés
   const [subjectList, setSubjectList] = useState(['React / Web', 'Histoire', 'Mathématiques']);
   const [selectedSubject, setSelectedSubject] = useState('React / Web');
   const [newSubjectInput, setNewSubjectInput] = useState('');
   const [savedDecks, setSavedDecks] = useState([]);
 
-  // Exercices actifs
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [flashcards, setFlashcards] = useState(DEFAULT_FLASHCARDS);
   const [fillBlanks, setFillBlanks] = useState(DEFAULT_FILLBLANKS);
   const [rawInputText, setRawInputText] = useState('');
 
-  // États du Quiz
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [score, setScore] = useState(0);
@@ -168,24 +192,20 @@ export default function App() {
   const [timeLeft, setTimeLeft] = useState(30);
   const [isTimerActive, setIsTimerActive] = useState(false);
 
-  // États Flashcards & Phrases à trous
   const [cardIndex, setCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [fillIndex, setFillIndex] = useState(0);
   const [userBlankInput, setUserBlankInput] = useState('');
   const [fillResultState, setFillResultState] = useState(null);
 
-  // États Photo / Webcam / OCR
   const [isCameraActive, setIsCameraActive] = useState(false);
   const videoRef = useRef(null);
 
-  // Erreurs & Chargement
   const [uploadError, setUploadError] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [ocrProgress, setOcrProgress] = useState('');
   const [history, setHistory] = useState([]);
 
-  // Chargement des données au démarrage
   useEffect(() => {
     try {
       const savedHistory = localStorage.getItem('studysnap_history');
@@ -209,7 +229,6 @@ export default function App() {
     });
   }, []);
 
-  // Ajouter une nouvelle matière
   const handleAddSubject = () => {
     if (newSubjectInput.trim() && !subjectList.includes(newSubjectInput.trim())) {
       const updated = [...subjectList, newSubjectInput.trim()];
@@ -220,7 +239,6 @@ export default function App() {
     }
   };
 
-  // Sauvegarder le deck généré
   const saveDeckToStorage = (title, category, newQ, newFc, newFb) => {
     const newDeck = {
       id: Date.now(),
@@ -239,7 +257,6 @@ export default function App() {
     });
   };
 
-  // Charger un deck sauvegardé
   const handleLoadDeck = (deck) => {
     setQuestions(deck.questions);
     setFlashcards(deck.flashcards);
@@ -248,14 +265,12 @@ export default function App() {
     startQuiz(deck.questions);
   };
 
-  // Supprimer un deck sauvegardé
   const handleDeleteDeck = (id) => {
     const updated = savedDecks.filter((d) => d.id !== id);
     setSavedDecks(updated);
     localStorage.setItem('studysnap_decks', JSON.stringify(updated));
   };
 
-  // Gestion du Minuteur
   const handleNextQuestion = useCallback(() => {
     setCurrentQuestionIndex((prevIdx) => {
       if (prevIdx + 1 < questions.length) {
@@ -337,7 +352,6 @@ export default function App() {
     }, 400);
   };
 
-  // Camera / Capture Photo
   const startCamera = async () => {
     setIsCameraActive(true);
     setUploadError(null);
@@ -366,14 +380,12 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     stopCamera();
-
-    // Extraction OCR via Tesseract
     processImageOCR(canvas.toDataURL('image/png'));
   };
 
   const processImageOCR = async (imageSrc) => {
     setIsAnalyzing(true);
-    setOcrProgress("Chargement du module de reconnaissance de texte...");
+    setOcrProgress("Extraction du texte de l'image...");
 
     try {
       if (!window.Tesseract) {
@@ -383,43 +395,60 @@ export default function App() {
         await new Promise((resolve) => (script.onload = resolve));
       }
 
-      setOcrProgress("Lecture de l'image de cours en cours...");
       const worker = await window.Tesseract.createWorker('fra');
       const ret = await worker.recognize(imageSrc);
       await worker.terminate();
 
       const text = ret.data.text;
       if (!text.trim()) {
-        throw new Error("Aucun texte lisible n'a été trouvé sur la photo.");
+        throw new Error("Aucun texte trouvé dans l'image.");
       }
 
       setRawInputText(text);
       setOcrProgress('');
       handleProcessText(text);
     } catch (err) {
-      setUploadError(err.message || "Erreur de traitement de l'image.");
+      setUploadError(err.message || "Erreur de lecture de l'image.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
   };
 
-  const handleFileUpload = (event) => {
+  // --- HOULETTE POUR FICHIERS PDF, IMAGE ET TEXTE ---
+  const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     setUploadError(null);
     if (!file) return;
 
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = (e) => processImageOCR(e.target.result);
-      reader.readAsDataURL(file);
-    } else {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const content = e.target?.result;
-        setRawInputText(content);
-        handleProcessText(content);
-      };
-      reader.readAsText(file);
+    setIsAnalyzing(true);
+
+    try {
+      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+        setOcrProgress("Extraction du texte PDF en cours...");
+        const extractedText = await extractTextFromPdf(file);
+        if (!extractedText.trim()) {
+          throw new Error("Le PDF semble être un document scanné sous forme d'image sans texte sélectionnable.");
+        }
+        setRawInputText(extractedText);
+        setOcrProgress('');
+        handleProcessText(extractedText);
+      } else if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (e) => processImageOCR(e.target.result);
+        reader.readAsDataURL(file);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const content = e.target?.result;
+          setRawInputText(content);
+          handleProcessText(content);
+        };
+        reader.readAsText(file);
+      }
+    } catch (err) {
+      setUploadError(err.message || "Erreur lors du traitement du fichier.");
+      setIsAnalyzing(false);
+      setOcrProgress('');
     }
   };
 
@@ -461,12 +490,10 @@ export default function App() {
       </header>
 
       <main className="max-w-3xl mx-auto p-4 md:p-6">
-        {/* 1. ACCUEIL & NUMÉRISATION */}
         {activeTab === 'home' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               
-              {/* Choix de la matière */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">1. Choisir ou créer une matière</label>
                 <div className="flex space-x-2">
@@ -494,9 +521,8 @@ export default function App() {
 
               <div className="border-t border-slate-100 my-2"></div>
 
-              {/* Boutons photo & Upload */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner votre page de cours</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner votre cours (PDF / Image / Photo)</label>
                 
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
@@ -517,15 +543,14 @@ export default function App() {
                       <span className="text-sm font-semibold text-indigo-900">Prendre une photo du cours</span>
                     </button>
                     <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
-                      <input type="file" onChange={handleFileUpload} accept="image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                      <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <Upload className="w-6 h-6 text-indigo-500 mb-1" />
-                      <span className="text-sm font-semibold text-slate-700">Importer une image ou fichier</span>
+                      <span className="text-sm font-semibold text-slate-700">Importer PDF, Image ou Texte</span>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Texte Brut direct */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Ou copier-coller votre texte</label>
                 <textarea
