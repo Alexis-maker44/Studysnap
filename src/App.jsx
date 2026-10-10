@@ -22,21 +22,22 @@ const speakText = (text) => {
   }
 };
 
-// --- APPEL UNIFIÉ GEMINI & OPENAI ---
+// --- APPEL EXTERNE ROBUSTE (GEMINI / OPENAI) ---
 async function generateExercisesWithExternalAI(sourceText, apiKey) {
-  const isGeminiKey = apiKey.startsWith('AIza') || !apiKey.startsWith('sk-');
+  const cleanKey = apiKey.trim();
+  const isGeminiKey = cleanKey.startsWith('AIza') || !cleanKey.startsWith('sk-');
 
   const promptText = `
-Tu es un expert pédagogique. Analyse le cours suivant et génère exactement 5 questions de révision sous forme de JSON strict.
+Tu es un professeur expert. Analyse le cours suivant et génère exactement 5 questions sous forme de JSON strict.
 Contenu du cours :
 """${sourceText.slice(0, 4000)}"""
 
-Format de réponse attendu (reponds STRICTEMENT ET UNIQUEMENT avec un objet JSON valide, sans texte d'introduction ni balises markdown) :
+Format de réponse (Réponds EXCLUSIVEMENT avec cet objet JSON valide, sans texte avant ni après, sans balises markdown de type code si possible) :
 {
   "questions": [
     {
       "id": 1,
-      "question": "Intitulé clair d'une question importante sur le cours",
+      "question": "Intitulé clair et précis d'une question sur le cours",
       "options": ["Bonne réponse", "Mauvaise réponse 1 crédible", "Mauvaise réponse 2 crédible", "Mauvaise réponse 3 crédible"],
       "correctAnswer": 0,
       "explanation": "Explication pédagogique basée sur le cours."
@@ -54,32 +55,40 @@ Format de réponse attendu (reponds STRICTEMENT ET UNIQUEMENT avec un objet JSON
   let rawContent = '';
 
   if (isGeminiKey) {
-    // --- APPEL API GOOGLE GEMINI ---
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey.trim()}`;
-    
-    const response = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: promptText }] }],
-        generationConfig: { responseMimeType: "application/json" }
-      })
-    });
+    // Essai successif de plusieurs modèles Gemini pour éviter les erreurs 404 de version
+    const modelsToTry = ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-latest'];
+    let response = null;
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData?.error?.message || "Erreur de connexion à l'API Gemini. Vérifiez votre clé.");
+    for (const modelName of modelsToTry) {
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`;
+      try {
+        response = await fetch(geminiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }],
+            generationConfig: { responseMimeType: "application/json" }
+          })
+        });
+        if (response.ok) break;
+      } catch (e) {
+        // Essayer le modèle suivant
+      }
+    }
+
+    if (!response || !response.ok) {
+      throw new Error("Erreur de connexion à l'API Gemini. Bascule automatique sur le mode local activée.");
     }
 
     const data = await response.json();
     rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   } else {
-    // --- APPEL API OPENAI ---
+    // --- APPEL OPENAI ---
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey.trim()}`
+        'Authorization': `Bearer ${cleanKey}`
       },
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
@@ -89,7 +98,7 @@ Format de réponse attendu (reponds STRICTEMENT ET UNIQUEMENT avec un objet JSON
     });
 
     if (!response.ok) {
-      throw new Error("Erreur de connexion à l'API OpenAI. Vérifiez votre clé.");
+      throw new Error("Erreur de connexion à l'API OpenAI.");
     }
 
     const data = await response.json();
@@ -100,14 +109,14 @@ Format de réponse attendu (reponds STRICTEMENT ET UNIQUEMENT avec un objet JSON
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL DE SECOURS (PARAGRAPHES SÉMANTIQUES) ---
+// --- MOTEUR LOCAL DE SECOURS (SÉMANTIQUE) ---
 function semanticParagraphAnalysis(sourceText) {
   if (!sourceText) return [];
 
   const rawBlocks = sourceText
     .split(/\n\s*\n|(?<=[.!?])\s+/)
     .map((b) => b.replace(/^[-•*0-9.]+\s*/, '').trim())
-    .filter((b) => b.length > 30);
+    .filter((b) => b.length > 25);
 
   const semanticPairs = [];
 
@@ -173,7 +182,7 @@ function generateAllExercisesLocal(sourceText) {
 
     const fallbacks = [
       `Cette notion décrit un phénomène non mentionné dans cette partie du cours.`,
-      `Il s'agit d'une hypothèse écartée par l'analyse du document.`,
+      `Il s'agit d'une hypothèse écartée par l'analyse globale du document.`,
       `Cette définition correspond à un prérequis d'un autre chapitre.`
     ];
     while (wrongOptions.length < 3) {
@@ -192,10 +201,22 @@ function generateAllExercisesLocal(sourceText) {
     });
   });
 
+  // Sécurité par défaut si le texte est très court
+  const defaultQ = [{
+    id: 1,
+    question: "Quelle est la meilleure approche de révision active ?",
+    options: ["Tester ses connaissances régulièrement", "Relire passivement le cours", "Apprendre sans pratiquer", "Ignorer les corrections"],
+    correctAnswer: 0,
+    explanation: "La révision active stimule la mémorisation durable."
+  }];
+
+  const defaultFc = [{ id: 1, front: "Rappel", back: "Veuillez fournir un texte plus détaillé." }];
+  const defaultFb = [{ id: 1, sentenceWithBlank: "L'apprentissage [___] est efficace.", missingWord: "actif", explanation: "Implique une participation." }];
+
   return {
-    questions: generatedQuestions,
-    flashcards: generatedFlashcards,
-    fillBlanks: generatedFillBlanks
+    questions: generatedQuestions.length > 0 ? generatedQuestions : defaultQ,
+    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : defaultFc,
+    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : defaultFb
   };
 }
 
@@ -224,7 +245,6 @@ export default function App() {
   const [fillBlanks, setFillBlanks] = useState([]);
   const [rawInputText, setRawInputText] = useState('');
   
-  // Clé API enregistrée
   const [apiKey, setApiKey] = useState('');
   const [isKeySavedSuccess, setIsKeySavedSuccess] = useState(false);
 
@@ -249,7 +269,6 @@ export default function App() {
   const [ocrProgress, setOcrProgress] = useState('');
   const [history, setHistory] = useState([]);
 
-  // Chargement initial des données enregistrées
   useEffect(() => {
     try {
       const savedHistory = localStorage.getItem('studysnap_history');
@@ -428,9 +447,15 @@ export default function App() {
       let generated;
       if (apiKey && apiKey.trim().length > 5) {
         setOcrProgress("Génération intelligente avec l'IA...");
-        generated = await generateExercisesWithExternalAI(text, apiKey);
+        try {
+          generated = await generateExercisesWithExternalAI(text, apiKey);
+        } catch (apiErr) {
+          console.warn("Échec IA externe, bascule sur le moteur local :", apiErr);
+          setOcrProgress("Bascule sur le mode local sémantique...");
+          generated = generateAllExercisesLocal(text);
+        }
       } else {
-        setOcrProgress("Analyse sémantique locale...");
+        setOcrProgress("Analyse locale sémantique...");
         generated = generateAllExercisesLocal(text);
       }
 
@@ -451,7 +476,7 @@ export default function App() {
       startSession(generated.questions, generated.flashcards, generated.fillBlanks);
     } catch (e) {
       console.error(e);
-      setUploadError(e.message || "Erreur de connexion IA. Assurez-vous d'utiliser une clé valide.");
+      setUploadError("Une erreur est survenue lors de l'analyse.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -579,7 +604,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.5</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.6</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -601,7 +626,7 @@ export default function App() {
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
                 <h2 className="text-2xl font-bold text-slate-900">IA & Génération Pédagogique</h2>
-                <p className="text-slate-600 text-sm mt-1">Insérez votre clé Gemini pour débloquer la génération IA sur-mesure.</p>
+                <p className="text-slate-600 text-sm mt-1">Configurez votre clé Gemini/OpenAI (enregistrée automatiquement).</p>
               </div>
 
               {/* SAUVEGARDE PERMANENTE DE LA CLÉ API */}
@@ -609,7 +634,7 @@ export default function App() {
                 <div className="flex justify-between items-center">
                   <div className="flex items-center space-x-2">
                     <Cpu className="w-4 h-4 text-indigo-600" />
-                    <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Configuration Clé API (Gemini / OpenAI)</span>
+                    <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Clé API (Gemini / OpenAI)</span>
                   </div>
                   {isKeySavedSuccess && <span className="text-xs text-green-600 font-semibold flex items-center space-x-1"><CheckCircle2 className="w-3.5 h-3.5" /> <span>Clé enregistrée !</span></span>}
                 </div>
@@ -627,7 +652,7 @@ export default function App() {
                     <Save className="w-4 h-4" />
                   </button>
                 </div>
-                <p className="text-[11px] text-slate-500">🔒 Votre clé est enregistrée localement dans votre navigateur et n'est redemandée à aucun moment.</p>
+                <p className="text-[11px] text-slate-500">🔒 Votre clé est stockée localement. En cas de souci avec l'API, le mode local s'active automatiquement.</p>
               </div>
 
               <div className="space-y-2">
@@ -868,7 +893,7 @@ export default function App() {
                           Vérifier
                         </button>
                       ) : (
-                        <button onClick={advanceToNextStep} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2.5 rounded-xl font-medium transition flex items-center space-x-1">
+                        <button onClick={advanceToNextStep} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-medium transition flex items-center space-x-1">
                           <span>Suivant</span>
                           <ChevronRight className="w-4 h-4" />
                         </button>
