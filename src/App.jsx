@@ -2,8 +2,44 @@ import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, FileText, Check, X, 
-  Shuffle, BarChart2, Home, Plus, Brain, Volume2, VolumeX, Eye, Settings, Mic 
+  Shuffle, BarChart2, Home, Plus, Brain, Volume2, Mic 
 } from 'lucide-react';
+
+// --- CHARGEMENT DYNAMIQUE DE PDF.JS VIA CDN ---
+const loadPdfJs = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if ((window as any).pdfjsLib) {
+      resolve((window as any).pdfjsLib);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    script.onload = () => {
+      const pdfjsLib = (window as any).pdfjsLib;
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      resolve(pdfjsLib);
+    };
+    script.onerror = () => reject(new Error("Impossible de charger la bibliothèque PDF.js"));
+    document.head.appendChild(script);
+  });
+};
+
+// --- EXTRACTION DU TEXTE D'UN FICHIER PDF ---
+const extractTextFromPdf = async (file: File): Promise<string> => {
+  const pdfjsLib = await loadPdfJs();
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let fullText = '';
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const tokenized = await page.getTextContent();
+    const pageText = tokenized.items.map((item: any) => item.str).join(' ');
+    fullText += pageText + '\n';
+  }
+
+  return fullText;
+};
 
 // --- TYPES ---
 type ActiveTab = 'home' | 'quiz' | 'flashcards' | 'fillblank' | 'history';
@@ -73,10 +109,10 @@ const DEFAULT_FILLBLANKS: FillInTheBlank[] = [
   }
 ];
 
-// --- SYNTHÈSE VOCALE (AUDIO) ---
+// --- SYNTHÈSE VOCALE ---
 const speakText = (text: string) => {
   if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel(); // Arrêter la lecture précédente s'il y en a une
+    window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'fr-FR';
     window.speechSynthesis.speak(utterance);
@@ -85,7 +121,7 @@ const speakText = (text: string) => {
   }
 };
 
-// --- MOTEUR DE GÉNÉRATION ÉTENDU ---
+// --- MOTEUR DE GÉNÉRATION D'EXERCICES (AVEC MÉLANGE ALÉATOIRE DES RÉPONSES) ---
 function generateAllExercisesFromText(sourceText: string) {
   const rawSentences = sourceText
     .split(/(?<=[.!?])\s+/)
@@ -103,19 +139,25 @@ function generateAllExercisesFromText(sourceText: string) {
       const subject = match[1].replace(/^[-•*]\s*/, '').trim();
       const definition = match[3].trim();
 
-      // QCM
-      const options = [
-        definition,
+      // 1. Définir la bonne réponse et les distracteurs
+      const correctText = definition;
+      const wrongOptions = [
         `Une méthode alternative non liée à ${subject}.`,
         `Un concept obsolète dans ce domaine.`,
         `Une erreur de configuration fréquente.`
-      ].sort(() => Math.random() - 0.5);
+      ];
+
+      // 2. Mélanger aléatoirement les propositions
+      const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
+
+      // 3. Récupérer le nouvel index de la bonne réponse
+      const correctIndex = allOptions.indexOf(correctText);
 
       generatedQuestions.push({
         id: index + 1,
         question: `Que désigne le terme ou concept « ${subject} » ?`,
-        options,
-        correctAnswer: options.indexOf(definition),
+        options: allOptions,
+        correctAnswer: correctIndex,
         explanation: sentence
       });
 
@@ -126,7 +168,7 @@ function generateAllExercisesFromText(sourceText: string) {
         back: definition
       });
 
-      // Fill in the blank (Phrase à trou)
+      // Phrase à trou
       if (subject.length > 3 && subject.length < 25) {
         const sentenceWithBlank = sentence.replace(new RegExp(subject, 'gi'), '[___]');
         if (sentenceWithBlank !== sentence) {
@@ -141,21 +183,35 @@ function generateAllExercisesFromText(sourceText: string) {
     }
   });
 
-  // Mode secours si le texte est court ou sans structure stricte
+  // Mode de secours si le texte manque de structures explicites
   if (generatedQuestions.length === 0 && rawSentences.length > 0) {
-    rawSentences.slice(0, 3).forEach((sentence, i) => {
+    rawSentences.slice(0, 5).forEach((sentence, i) => {
       generatedFlashcards.push({ id: i + 1, front: `Point clé n°${i + 1}`, back: sentence });
-      generatedQuestions.push({
-        id: i + 1,
-        question: `D'après le cours : quel énoncé est correct ?`,
-        options: [sentence, "Information erronée.", "Non mentionné.", "Aucune de ces réponses."],
-        correctAnswer: 0,
-        explanation: sentence
-      });
+      
+      const words = sentence.split(' ');
+      const keyWord = words.find(w => w.length > 5) || words[0];
+      
       generatedFillBlanks.push({
         id: i + 1,
-        sentenceWithBlank: `[___] (extrait du cours).`,
-        missingWord: sentence.split(' ')[0],
+        sentenceWithBlank: sentence.replace(keyWord, '[___]'),
+        missingWord: keyWord.replace(/[,.]/g, ''),
+        explanation: sentence
+      });
+
+      const correctText = sentence;
+      const wrongOptions = [
+        "Cette affirmation est fausse d'après le document.",
+        "Information non mentionnée dans le cours.",
+        "Aucune de ces propositions n'est correcte."
+      ];
+      const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
+      const correctIndex = allOptions.indexOf(correctText);
+
+      generatedQuestions.push({
+        id: i + 1,
+        question: `Extrait du cours : quelle est l'affirmation exacte ?`,
+        options: allOptions,
+        correctAnswer: correctIndex,
         explanation: sentence
       });
     });
@@ -174,8 +230,8 @@ export default function StudySnapApp() {
   const [flashcards, setFlashcards] = useState<Flashcard[]>(DEFAULT_FLASHCARDS);
   const [fillBlanks, setFillBlanks] = useState<FillInTheBlank[]>(DEFAULT_FILLBLANKS);
   const [rawInputText, setRawInputText] = useState('');
-  
-  // États Quiz
+
+  // États du Quiz
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [score, setScore] = useState(0);
@@ -183,16 +239,16 @@ export default function StudySnapApp() {
   const [timeLeft, setTimeLeft] = useState<number>(30);
   const [isTimerActive, setIsTimerActive] = useState(false);
 
-  // États Flashcards
+  // États des Flashcards
   const [cardIndex, setCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
 
-  // États Phrases à trous (Duolingo style)
+  // États des Phrases à trous
   const [fillIndex, setFillIndex] = useState(0);
   const [userBlankInput, setUserBlankInput] = useState('');
   const [fillResultState, setFillResultState] = useState<'correct' | 'incorrect' | null>(null);
 
-  // Erreurs & Historique
+  // Gestion des erreurs et du chargement
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [history, setHistory] = useState<QuizResult[]>([]);
@@ -223,7 +279,6 @@ export default function StudySnapApp() {
     return () => clearInterval(timer);
   }, [isTimerActive, timeLeft, isQuizFinished, activeTab]);
 
-  // Lancement Quiz
   const startQuiz = (customQ?: Question[]) => {
     if (customQ) setQuestions(customQ);
     setCurrentQuestionIndex(0);
@@ -253,15 +308,15 @@ export default function StudySnapApp() {
       setIsTimerActive(false);
       const total = questions.length;
       const percentage = Math.round((score / total) * 100);
-      saveHistory({ date: new Date().toLocaleDateString('fr-FR', {hour:'2-digit', minute:'2-digit'}), score, total, percentage });
+      saveHistory({ date: new Date().toLocaleDateString('fr-FR', { hour: '2-digit', minute: '2-digit' }), score, total, percentage });
     }
   };
 
-  // Traitement Texte / Fichiers (TXT, JSON ou PDF natif via FileReader / Text)
+  // Traitement du texte
   const handleProcessText = (text: string) => {
     setUploadError(null);
     if (!text.trim()) {
-      setUploadError("Le contenu est vide.");
+      setUploadError("Le contenu du texte est vide.");
       return;
     }
     setIsAnalyzing(true);
@@ -272,58 +327,57 @@ export default function StudySnapApp() {
       setFillBlanks(generated.fillBlanks);
       setIsAnalyzing(false);
       startQuiz(generated.questions);
-    }, 600);
+    }, 400);
   };
 
-  // Gestionnaire d'import de fichiers (TXT, JSON, PDF)
+  // Gestion des fichiers (PDF, TXT, JSON)
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     setUploadError(null);
     if (!file) return;
 
-    if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-      // Support PDF natif via chargement du fichier texte / lecture basique
-      try {
-        setIsAnalyzing(true);
-        // Simulation d'extraction ou lecture du PDF (pour une intégration complète en prod, utiliser pdfjs-dist)
+    setIsAnalyzing(true);
+
+    try {
+      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+        const extractedText = await extractTextFromPdf(file);
+        if (!extractedText.trim()) {
+          throw new Error("Impossible d'extraire du texte de ce fichier PDF (document scanné sous forme d'image).");
+        }
+        setRawInputText(extractedText);
+        handleProcessText(extractedText);
+      } else if (file.name.endsWith('.json')) {
         const reader = new FileReader();
-        reader.onload = async (e) => {
-          const content = e.target?.result as string;
-          // Si le PDF est lu en ArrayBuffer, on peut extraire le texte brut simulé ou utiliser une lib externe.
-          // Pour l'exemple autonome, on extrait les chaînes de texte lisibles du binaire PDF ou on bascule sur un traitement texte.
-          handleProcessText("Cours extrait du PDF : " + file.name + " " + (content.slice(0, 1000) || "Introduction aux concepts fondamentaux."));
+        reader.onload = (e) => {
+          try {
+            const parsed = JSON.parse(e.target?.result as string);
+            if (Array.isArray(parsed)) {
+              setQuestions(parsed);
+              setIsAnalyzing(false);
+              startQuiz(parsed);
+            }
+          } catch {
+            setUploadError("Format JSON invalide.");
+            setIsAnalyzing(false);
+          }
         };
         reader.readAsText(file);
-      } catch (err) {
-        setUploadError("Erreur lors de la lecture du PDF.");
-        setIsAnalyzing(false);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const content = e.target?.result as string;
+          setRawInputText(content);
+          handleProcessText(content);
+        };
+        reader.readAsText(file);
       }
-    } else if (file.name.endsWith('.json')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const parsed = JSON.parse(e.target?.result as string);
-          if (Array.isArray(parsed)) {
-            setQuestions(parsed);
-            startQuiz(parsed);
-          }
-        } catch {
-          setUploadError("Format JSON invalide.");
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const content = e.target?.result as string;
-        setRawInputText(content);
-        handleProcessText(content);
-      };
-      reader.readAsText(file);
+    } catch (err: any) {
+      setUploadError(err.message || "Erreur lors de la lecture du fichier.");
+      setIsAnalyzing(false);
     }
   };
 
-  // Validation phrase à trou (Duolingo style)
+  // Validation phrase à trou
   const handleCheckFillBlank = () => {
     const current = fillBlanks[fillIndex];
     if (userBlankInput.trim().toLowerCase() === current.missingWord.toLowerCase()) {
@@ -341,9 +395,9 @@ export default function StudySnapApp() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">Duolingo AI</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v2.0</span></h1>
         </div>
-        <nav className="flex space-x-1 md:space-x-2 overflow-x-auto">
+        <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
             <Home className="w-4 h-4" /> <span className="hidden md:inline">Accueil</span>
           </button>
@@ -365,37 +419,39 @@ export default function StudySnapApp() {
       {/* CONTENU PRINCIPAL */}
       <main className="max-w-3xl mx-auto p-4 md:p-6">
 
-        {/* 1. ACCUEIL & IMPORT PDF / TEXTE */}
+        {/* 1. ACCUEIL & IMPORT */}
         {activeTab === 'home' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Transformez vos cours en parcours gamifiés</h2>
-                <p className="text-slate-600 text-sm mt-1">Importez un PDF, un fichier texte ou collez votre cours pour générer instantanément QCM, Flashcards et Exercices vocaux.</p>
+                <h2 className="text-2xl font-bold text-slate-900">Générez vos exercices de révision</h2>
+                <p className="text-slate-600 text-sm mt-1">Déposez un fichier PDF/TXT ou collez votre cours pour créer vos QCM et exercices vocaux.</p>
               </div>
 
-              {/* Import Fichier (PDF / TXT / JSON) */}
+              {/* Import PDF / TXT */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Importer un document (PDF / TXT / JSON)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Option 1 : Charger un document (.pdf / .txt)</label>
                 <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/40 rounded-xl p-6 hover:border-indigo-400 transition cursor-pointer relative text-center">
                   <input type="file" onChange={handleFileUpload} accept=".pdf,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                   <Upload className="w-8 h-8 text-indigo-500 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-slate-700">Glissez votre PDF ou cliquez ici</p>
-                  <p className="text-xs text-slate-400 mt-1">Support natif PDF & texte brut</p>
+                  <p className="text-sm font-semibold text-slate-700">Cliquez ou glissez un PDF / texte ici</p>
+                  <p className="text-xs text-slate-400 mt-1">Extraction automatique du texte PDF intégrée</p>
                 </div>
               </div>
 
               <div className="relative flex py-1 items-center">
                 <div className="flex-grow border-t border-slate-200"></div>
-                <span className="flex-shrink mx-4 text-xs font-semibold text-slate-400 uppercase">OU COLPSTEZ DU TEXTE</span>
+                <span className="flex-shrink mx-4 text-xs font-semibold text-slate-400 uppercase">OU</span>
                 <div className="flex-grow border-t border-slate-200"></div>
               </div>
 
+              {/* Texte Brut */}
               <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Option 2 : Coller votre texte</label>
                 <textarea
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Collez le contenu de votre cours ici..."
+                  placeholder="Collez votre cours ici..."
                   rows={4}
                   className="w-full p-3 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
@@ -405,7 +461,7 @@ export default function StudySnapApp() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-2.5 rounded-xl transition flex items-center justify-center space-x-2"
                 >
                   <Sparkles className="w-4 h-4" />
-                  <span>{isAnalyzing ? "Génération par l'IA en cours..." : "Générer les exercices"}</span>
+                  <span>{isAnalyzing ? "Analyse du document..." : "Générer le Quiz"}</span>
                 </button>
               </div>
 
@@ -501,7 +557,7 @@ export default function StudySnapApp() {
           </div>
         )}
 
-        {/* 3. MODE PHRASES À TROUS & VOCAL (Style Duolingo) */}
+        {/* 3. MODE PHRASES À TROUS & VOCAL */}
         {activeTab === 'fillblank' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
             <div className="flex justify-between items-center">
