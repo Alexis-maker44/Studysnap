@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
-  RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic 
+  RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic, Camera, Folder, Trash2, Plus
 } from 'lucide-react';
 
+// --- DONNÉES PAR DÉFAUT ---
 const DEFAULT_QUESTIONS = [
   {
     id: 1,
@@ -146,11 +147,20 @@ function generateAllExercisesFromText(sourceText) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
+  
+  // Gestion des matières et decks enregistrés
+  const [subjectList, setSubjectList] = useState(['React / Web', 'Histoire', 'Mathématiques']);
+  const [selectedSubject, setSelectedSubject] = useState('React / Web');
+  const [newSubjectInput, setNewSubjectInput] = useState('');
+  const [savedDecks, setSavedDecks] = useState([]);
+
+  // Exercices actifs
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
   const [flashcards, setFlashcards] = useState(DEFAULT_FLASHCARDS);
   const [fillBlanks, setFillBlanks] = useState(DEFAULT_FILLBLANKS);
   const [rawInputText, setRawInputText] = useState('');
 
+  // États du Quiz
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [score, setScore] = useState(0);
@@ -158,21 +168,34 @@ export default function App() {
   const [timeLeft, setTimeLeft] = useState(30);
   const [isTimerActive, setIsTimerActive] = useState(false);
 
+  // États Flashcards & Phrases à trous
   const [cardIndex, setCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
-
   const [fillIndex, setFillIndex] = useState(0);
   const [userBlankInput, setUserBlankInput] = useState('');
   const [fillResultState, setFillResultState] = useState(null);
 
+  // États Photo / Webcam / OCR
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const videoRef = useRef(null);
+
+  // Erreurs & Chargement
   const [uploadError, setUploadError] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState('');
   const [history, setHistory] = useState([]);
 
+  // Chargement des données au démarrage
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('studysnap_history');
-      if (saved) setHistory(JSON.parse(saved));
+      const savedHistory = localStorage.getItem('studysnap_history');
+      if (savedHistory) setHistory(JSON.parse(savedHistory));
+
+      const savedSubjects = localStorage.getItem('studysnap_subjects');
+      if (savedSubjects) setSubjectList(JSON.parse(savedSubjects));
+
+      const decks = localStorage.getItem('studysnap_decks');
+      if (decks) setSavedDecks(JSON.parse(decks));
     } catch (e) {
       console.error(e);
     }
@@ -186,6 +209,53 @@ export default function App() {
     });
   }, []);
 
+  // Ajouter une nouvelle matière
+  const handleAddSubject = () => {
+    if (newSubjectInput.trim() && !subjectList.includes(newSubjectInput.trim())) {
+      const updated = [...subjectList, newSubjectInput.trim()];
+      setSubjectList(updated);
+      setSelectedSubject(newSubjectInput.trim());
+      setNewSubjectInput('');
+      localStorage.setItem('studysnap_subjects', JSON.stringify(updated));
+    }
+  };
+
+  // Sauvegarder le deck généré
+  const saveDeckToStorage = (title, category, newQ, newFc, newFb) => {
+    const newDeck = {
+      id: Date.now(),
+      title: title || `Cours du ${new Date().toLocaleDateString('fr-FR')}`,
+      subject: category,
+      date: new Date().toLocaleDateString('fr-FR'),
+      questions: newQ,
+      flashcards: newFc,
+      fillBlanks: newFb
+    };
+
+    setSavedDecks((prev) => {
+      const updated = [newDeck, ...prev];
+      localStorage.setItem('studysnap_decks', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // Charger un deck sauvegardé
+  const handleLoadDeck = (deck) => {
+    setQuestions(deck.questions);
+    setFlashcards(deck.flashcards);
+    setFillBlanks(deck.fillBlanks);
+    setSelectedSubject(deck.subject);
+    startQuiz(deck.questions);
+  };
+
+  // Supprimer un deck sauvegardé
+  const handleDeleteDeck = (id) => {
+    const updated = savedDecks.filter((d) => d.id !== id);
+    setSavedDecks(updated);
+    localStorage.setItem('studysnap_decks', JSON.stringify(updated));
+  };
+
+  // Gestion du Minuteur
   const handleNextQuestion = useCallback(() => {
     setCurrentQuestionIndex((prevIdx) => {
       if (prevIdx + 1 < questions.length) {
@@ -200,6 +270,7 @@ export default function App() {
           const percentage = Math.round((currentScore / total) * 100);
           saveHistory({ 
             date: new Date().toLocaleDateString('fr-FR', { hour: '2-digit', minute: '2-digit' }), 
+            subject: selectedSubject,
             score: currentScore, 
             total, 
             percentage 
@@ -209,7 +280,7 @@ export default function App() {
         return prevIdx;
       }
     });
-  }, [questions.length, saveHistory]);
+  }, [questions.length, saveHistory, selectedSubject]);
 
   useEffect(() => {
     let timer;
@@ -252,48 +323,103 @@ export default function App() {
       setQuestions(generated.questions);
       setFlashcards(generated.flashcards);
       setFillBlanks(generated.fillBlanks);
+      
+      saveDeckToStorage(
+        text.slice(0, 25) + '...',
+        selectedSubject,
+        generated.questions,
+        generatedFlashcards,
+        generated.fillBlanks
+      );
+
       setIsAnalyzing(false);
       startQuiz(generated.questions);
     }, 400);
   };
 
-  const handleFileUpload = async (event) => {
+  // Camera / Capture Photo
+  const startCamera = async () => {
+    setIsCameraActive(true);
+    setUploadError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      if (videoRef.current) videoRef.current.srcObject = stream;
+    } catch {
+      setUploadError("Impossible d'accéder à la caméra de l'appareil.");
+      setIsCameraActive(false);
+    }
+  };
+
+  const stopCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject;
+      stream.getTracks().forEach((track) => track.stop());
+    }
+    setIsCameraActive(false);
+  };
+
+  const capturePhoto = () => {
+    if (!videoRef.current) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth || 640;
+    canvas.height = videoRef.current.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+    stopCamera();
+
+    // Extraction OCR via Tesseract
+    processImageOCR(canvas.toDataURL('image/png'));
+  };
+
+  const processImageOCR = async (imageSrc) => {
+    setIsAnalyzing(true);
+    setOcrProgress("Chargement du module de reconnaissance de texte...");
+
+    try {
+      if (!window.Tesseract) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+        document.head.appendChild(script);
+        await new Promise((resolve) => (script.onload = resolve));
+      }
+
+      setOcrProgress("Lecture de l'image de cours en cours...");
+      const worker = await window.Tesseract.createWorker('fra');
+      const ret = await worker.recognize(imageSrc);
+      await worker.terminate();
+
+      const text = ret.data.text;
+      if (!text.trim()) {
+        throw new Error("Aucun texte lisible n'a été trouvé sur la photo.");
+      }
+
+      setRawInputText(text);
+      setOcrProgress('');
+      handleProcessText(text);
+    } catch (err) {
+      setUploadError(err.message || "Erreur de traitement de l'image.");
+      setIsAnalyzing(false);
+      setOcrProgress('');
+    }
+  };
+
+  const handleFileUpload = (event) => {
     const file = event.target.files?.[0];
     setUploadError(null);
     if (!file) return;
 
-    setIsAnalyzing(true);
-
-    try {
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (e) => processImageOCR(e.target.result);
+      reader.readAsDataURL(file);
+    } else {
       const reader = new FileReader();
       reader.onload = (e) => {
         const content = e.target?.result;
-        if (file.name.endsWith('.json')) {
-          try {
-            const parsed = JSON.parse(content);
-            if (Array.isArray(parsed)) {
-              setQuestions(parsed);
-              setIsAnalyzing(false);
-              startQuiz(parsed);
-              return;
-            }
-          } catch {
-            setUploadError("Format JSON invalide.");
-            setIsAnalyzing(false);
-            return;
-          }
-        }
         setRawInputText(content);
         handleProcessText(content);
       };
-      reader.onerror = () => {
-        setUploadError("Erreur lors de la lecture du fichier.");
-        setIsAnalyzing(false);
-      };
       reader.readAsText(file);
-    } catch {
-      setUploadError("Erreur lors du traitement du fichier.");
-      setIsAnalyzing(false);
     }
   };
 
@@ -313,7 +439,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v2.0</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v2.1</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -323,48 +449,90 @@ export default function App() {
             <Sparkles className="w-4 h-4" /> <span className="hidden md:inline">Quiz</span>
           </button>
           <button onClick={() => setActiveTab('fillblank')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'fillblank' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
-            <Mic className="w-4 h-4" /> <span className="hidden md:inline">Trous & Vocal</span>
+            <Mic className="w-4 h-4" /> <span className="hidden md:inline">Phrases à trou</span>
           </button>
           <button onClick={() => setActiveTab('flashcards')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'flashcards' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
             <BookOpen className="w-4 h-4" /> <span className="hidden md:inline">Flashcards</span>
           </button>
           <button onClick={() => setActiveTab('history')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'history' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
-            <BarChart2 className="w-4 h-4" /> <span className="hidden md:inline">Stats</span>
+            <Folder className="w-4 h-4" /> <span className="hidden md:inline">Mes Decks</span>
           </button>
         </nav>
       </header>
 
       <main className="max-w-3xl mx-auto p-4 md:p-6">
+        {/* 1. ACCUEIL & NUMÉRISATION */}
         {activeTab === 'home' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
-              <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Générez vos exercices de révision</h2>
-                <p className="text-slate-600 text-sm mt-1">Collez votre cours ou importez un fichier texte pour générer instantanément vos exercices.</p>
-              </div>
-
+              
+              {/* Choix de la matière */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Option 1 : Charger un fichier (.txt / .json)</label>
-                <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/40 rounded-xl p-6 hover:border-indigo-400 transition cursor-pointer relative text-center">
-                  <input type="file" onChange={handleFileUpload} accept=".txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                  <Upload className="w-8 h-8 text-indigo-500 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-slate-700">Cliquez ou glissez un fichier texte ici</p>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">1. Choisir ou créer une matière</label>
+                <div className="flex space-x-2">
+                  <select
+                    value={selectedSubject}
+                    onChange={(e) => setSelectedSubject(e.target.value)}
+                    className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    {subjectList.map((subj, idx) => (
+                      <option key={idx} value={subj}>{subj}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    value={newSubjectInput}
+                    onChange={(e) => setNewSubjectInput(e.target.value)}
+                    placeholder="Nouvelle matière..."
+                    className="p-2.5 border border-slate-200 rounded-xl text-sm w-36 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <button onClick={handleAddSubject} className="p-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl">
+                    <Plus className="w-5 h-5" />
+                  </button>
                 </div>
               </div>
 
-              <div className="relative flex py-1 items-center">
-                <div className="flex-grow border-t border-slate-200"></div>
-                <span className="flex-shrink mx-4 text-xs font-semibold text-slate-400 uppercase">OU</span>
-                <div className="flex-grow border-t border-slate-200"></div>
+              <div className="border-t border-slate-100 my-2"></div>
+
+              {/* Boutons photo & Upload */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner votre page de cours</label>
+                
+                {isCameraActive ? (
+                  <div className="space-y-2 text-center">
+                    <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
+                    <div className="flex justify-center space-x-2">
+                      <button onClick={capturePhoto} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium flex items-center space-x-1">
+                        <Camera className="w-4 h-4" /> <span>Prendre la photo</span>
+                      </button>
+                      <button onClick={stopCamera} className="bg-slate-300 hover:bg-slate-400 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium">
+                        Annuler
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button onClick={startCamera} className="p-4 border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/50 rounded-xl flex flex-col items-center justify-center transition">
+                      <Camera className="w-6 h-6 text-indigo-600 mb-1" />
+                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo du cours</span>
+                    </button>
+                    <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
+                      <input type="file" onChange={handleFileUpload} accept="image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                      <Upload className="w-6 h-6 text-indigo-500 mb-1" />
+                      <span className="text-sm font-semibold text-slate-700">Importer une image ou fichier</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
+              {/* Texte Brut direct */}
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Option 2 : Coller votre texte</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Ou copier-coller votre texte</label>
                 <textarea
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Collez votre cours ici..."
-                  rows={4}
+                  placeholder="Collez le texte du cours ici..."
+                  rows={3}
                   className="w-full p-3 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
                 <button
@@ -373,7 +541,7 @@ export default function App() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-2.5 rounded-xl transition flex items-center justify-center space-x-2"
                 >
                   <Sparkles className="w-4 h-4" />
-                  <span>{isAnalyzing ? "Analyse en cours..." : "Générer les exercices"}</span>
+                  <span>{isAnalyzing ? (ocrProgress || "Analyse et génération...") : "Générer les exercices"}</span>
                 </button>
               </div>
 
@@ -387,6 +555,7 @@ export default function App() {
           </div>
         )}
 
+        {/* 2. MODE QUIZ */}
         {activeTab === 'quiz' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
             {!isQuizFinished ? (
@@ -394,10 +563,10 @@ export default function App() {
                 <div>
                   <div className="flex justify-between items-center mb-4">
                     <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">
-                      Question {currentQuestionIndex + 1} / {questions.length}
+                      Matière : {selectedSubject} | Question {currentQuestionIndex + 1} / {questions.length}
                     </span>
                     <div className="flex items-center space-x-2">
-                      <button onClick={() => speakText(questions[currentQuestionIndex].question)} className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600" title="Écouter la question">
+                      <button onClick={() => speakText(questions[currentQuestionIndex].question)} className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-600">
                         <Volume2 className="w-4 h-4" />
                       </button>
                       <div className="flex items-center space-x-1 text-slate-500 text-sm">
@@ -468,6 +637,7 @@ export default function App() {
           </div>
         )}
 
+        {/* 3. MODE PHRASES À TROUS */}
         {activeTab === 'fillblank' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
             <div className="flex justify-between items-center">
@@ -480,9 +650,7 @@ export default function App() {
             </div>
 
             <div className="p-6 bg-slate-50 rounded-2xl text-center">
-              <p className="text-lg font-medium text-slate-800 mb-4">
-                {fillBlanks[fillIndex]?.sentenceWithBlank}
-              </p>
+              <p className="text-lg font-medium text-slate-800 mb-4">{fillBlanks[fillIndex]?.sentenceWithBlank}</p>
               <input
                 type="text"
                 value={userBlankInput}
@@ -493,16 +661,8 @@ export default function App() {
               />
             </div>
 
-            {fillResultState === 'correct' && (
-              <div className="p-4 bg-green-50 text-green-700 rounded-xl text-sm font-semibold flex items-center justify-between">
-                <span>Bonne réponse ! 🎉</span>
-              </div>
-            )}
-            {fillResultState === 'incorrect' && (
-              <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm font-semibold">
-                <span>Incorrect. La réponse était : <b>{fillBlanks[fillIndex]?.missingWord}</b></span>
-              </div>
-            )}
+            {fillResultState === 'correct' && <div className="p-4 bg-green-50 text-green-700 rounded-xl text-sm font-semibold">Bonne réponse ! 🎉</div>}
+            {fillResultState === 'incorrect' && <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm font-semibold">Incorrect. La réponse était : <b>{fillBlanks[fillIndex]?.missingWord}</b></div>}
 
             <div className="flex justify-end space-x-3">
               {fillResultState === null ? (
@@ -522,6 +682,7 @@ export default function App() {
           </div>
         )}
 
+        {/* 4. MODE FLASHCARDS */}
         {activeTab === 'flashcards' && (
           <div className="max-w-md mx-auto space-y-6">
             <div onClick={() => setIsFlipped(!isFlipped)} className="bg-white border border-slate-200 rounded-2xl p-8 h-64 flex flex-col items-center justify-center text-center cursor-pointer shadow-sm hover:shadow-md transition relative select-none">
@@ -541,24 +702,55 @@ export default function App() {
           </div>
         )}
 
+        {/* 5. MES DECKS & HISTORIQUE */}
         {activeTab === 'history' && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-            <h2 className="text-xl font-bold text-slate-800 mb-4">Historique des sessions</h2>
-            {history.length === 0 ? (
-              <p className="text-slate-500 text-sm">Aucun historique pour le moment.</p>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {history.map((item, idx) => (
-                  <div key={idx} className="py-3 flex justify-between items-center">
-                    <div>
-                      <p className="text-sm font-medium text-slate-800">{item.date}</p>
-                      <p className="text-xs text-slate-500">Score : {item.score} / {item.total}</p>
+          <div className="space-y-6">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+              <h2 className="text-xl font-bold text-slate-800 mb-4">Mes Decks Enregistrés</h2>
+              {savedDecks.length === 0 ? (
+                <p className="text-slate-500 text-sm">Aucun deck sauvegardé. Générez un cours pour le sauvegarder ici.</p>
+              ) : (
+                <div className="space-y-3">
+                  {savedDecks.map((deck) => (
+                    <div key={deck.id} className="p-4 border border-slate-200 rounded-xl flex justify-between items-center bg-slate-50 hover:bg-slate-100/80 transition">
+                      <div>
+                        <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full">{deck.subject}</span>
+                        <h4 className="text-sm font-semibold text-slate-800 mt-1">{deck.title}</h4>
+                        <p className="text-xs text-slate-400">Créé le {deck.date} • {deck.questions.length} questions</p>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <button onClick={() => handleLoadDeck(deck)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium">
+                          S'entraîner
+                        </button>
+                        <button onClick={() => handleDeleteDeck(deck.id)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                    <span className={`text-sm font-bold ${item.percentage >= 50 ? 'text-green-600' : 'text-red-500'}`}>{item.percentage}%</span>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+              <h2 className="text-xl font-bold text-slate-800 mb-4">Historique des résultats</h2>
+              {history.length === 0 ? (
+                <p className="text-slate-500 text-sm">Aucun résultat récent.</p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {history.map((item, idx) => (
+                    <div key={idx} className="py-3 flex justify-between items-center">
+                      <div>
+                        <span className="text-xs font-medium text-slate-500">{item.subject || 'Général'}</span>
+                        <p className="text-sm font-medium text-slate-800">{item.date}</p>
+                        <p className="text-xs text-slate-500">Score : {item.score} / {item.total}</p>
+                      </div>
+                      <span className={`text-sm font-bold ${item.percentage >= 50 ? 'text-green-600' : 'text-red-500'}`}>{item.percentage}%</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </main>
