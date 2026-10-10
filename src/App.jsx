@@ -4,7 +4,6 @@ import {
   RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic 
 } from 'lucide-react';
 
-// --- CHARGEMENT DYNAMIQUE DE PDF.JS VIA CDN ---
 const loadPdfJs = (): Promise<any> => {
   return new Promise((resolve, reject) => {
     if ((window as any).pdfjsLib) {
@@ -18,29 +17,25 @@ const loadPdfJs = (): Promise<any> => {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       resolve(pdfjsLib);
     };
-    script.onerror = () => reject(new Error("Impossible de charger la bibliothèque PDF.js"));
+    script.onerror = () => reject(new Error("Impossible de charger PDF.js"));
     document.head.appendChild(script);
   });
 };
 
-// --- EXTRACTION DU TEXTE D'UN FICHIER PDF ---
 const extractTextFromPdf = async (file: File): Promise<string> => {
   const pdfjsLib = await loadPdfJs();
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   let fullText = '';
-
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const tokenized = await page.getTextContent();
     const pageText = tokenized.items.map((item: any) => item.str).join(' ');
     fullText += pageText + '\n';
   }
-
   return fullText;
 };
 
-// --- TYPES ---
 type ActiveTab = 'home' | 'quiz' | 'flashcards' | 'fillblank' | 'history';
 
 interface Question {
@@ -71,7 +66,6 @@ interface QuizResult {
   percentage: number;
 }
 
-// --- DONNÉES PAR DÉFAUT ---
 const DEFAULT_QUESTIONS: Question[] = [
   {
     id: 1,
@@ -108,19 +102,15 @@ const DEFAULT_FILLBLANKS: FillInTheBlank[] = [
   }
 ];
 
-// --- SYNTHÈSE VOCALE ---
 const speakText = (text: string) => {
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'fr-FR';
     window.speechSynthesis.speak(utterance);
-  } else {
-    alert("La synthèse vocale n'est pas supportée par votre navigateur.");
   }
 };
 
-// --- MOTEUR DE GÉNÉRATION D'EXERCICES (AVEC MÉLANGE ALÉATOIRE) ---
 function generateAllExercisesFromText(sourceText: string) {
   const rawSentences = sourceText
     .split(/(?<=[.!?])\s+/)
@@ -327,7 +317,7 @@ export default function StudySnapApp() {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
         const extractedText = await extractTextFromPdf(file);
         if (!extractedText.trim()) {
-          throw new Error("Impossible d'extraire du texte de ce fichier PDF (document scanné sous forme d'image).");
+          throw new Error("Impossible d'extraire du texte de ce fichier PDF.");
         }
         setRawInputText(extractedText);
         handleProcessText(extractedText);
