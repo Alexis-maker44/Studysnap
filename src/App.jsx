@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, 
-  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu
+  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save
 } from 'lucide-react';
 
 const STOP_WORDS = new Set([
@@ -22,57 +22,85 @@ const speakText = (text) => {
   }
 };
 
-// --- GÉNÉRATION VIA IA EXTERNE (OPENAI / COMPATIBLE) ---
+// --- APPEL UNIFIÉ GEMINI & OPENAI ---
 async function generateExercisesWithExternalAI(sourceText, apiKey) {
-  const prompt = `
-Tu es un expert pédagogique. Analyse le cours suivant et génère exactement 5 questions sous forme de JSON strict.
-Contenu du cours :
-"""${sourceText.slice(0, 3500)}"""
+  const isGeminiKey = apiKey.startsWith('AIza') || !apiKey.startsWith('sk-');
 
-Format attendu (reponds UNIQUEMENT avec un objet JSON valide) :
+  const promptText = `
+Tu es un expert pédagogique. Analyse le cours suivant et génère exactement 5 questions de révision sous forme de JSON strict.
+Contenu du cours :
+"""${sourceText.slice(0, 4000)}"""
+
+Format de réponse attendu (reponds STRICTEMENT ET UNIQUEMENT avec un objet JSON valide, sans texte d'introduction ni balises markdown) :
 {
   "questions": [
     {
       "id": 1,
-      "question": "Intitulé clair et précis d'une question importante sur le cours",
+      "question": "Intitulé clair d'une question importante sur le cours",
       "options": ["Bonne réponse", "Mauvaise réponse 1 crédible", "Mauvaise réponse 2 crédible", "Mauvaise réponse 3 crédible"],
       "correctAnswer": 0,
-      "explanation": "Explication pédagogique de la réponse."
+      "explanation": "Explication pédagogique basée sur le cours."
     }
   ],
   "flashcards": [
-    { "id": 1, "front": "Concept ou mot-clé", "back": "Définition ou explication claire." }
+    { "id": 1, "front": "Terme ou concept clé", "back": "Définition ou explication exacte." }
   ],
   "fillBlanks": [
-    { "id": 1, "sentenceWithBlank": "La phrase avec un [___] à compléter.", "missingWord": "mot", "explanation": "Rappel de la notion." }
+    { "id": 1, "sentenceWithBlank": "La phrase avec un [___] à compléter.", "missingWord": "mot", "explanation": "Explication de la notion." }
   ]
 }
 `;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.4
-    })
-  });
+  let rawContent = '';
 
-  if (!response.ok) {
-    throw new Error("Erreur de connexion à l'API IA (Vérifiez la clé API).");
+  if (isGeminiKey) {
+    // --- APPEL API GOOGLE GEMINI ---
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey.trim()}`;
+    
+    const response = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: promptText }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData?.error?.message || "Erreur de connexion à l'API Gemini. Vérifiez votre clé.");
+    }
+
+    const data = await response.json();
+    rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  } else {
+    // --- APPEL API OPENAI ---
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey.trim()}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: promptText }],
+        temperature: 0.3
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error("Erreur de connexion à l'API OpenAI. Vérifiez votre clé.");
+    }
+
+    const data = await response.json();
+    rawContent = data.choices[0].message.content;
   }
 
-  const data = await response.json();
-  const rawContent = data.choices[0].message.content.trim();
-  const jsonContent = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
+  const jsonContent = rawContent.replace(/```json/gi, '').replace(/```/g, '').trim();
   return JSON.parse(jsonContent);
 }
 
-// --- GÉNÉRATION EN MODE LOCAL (FALLBACK AUTOMATIQUE) ---
+// --- MOTEUR LOCAL DE SECOURS (PARAGRAPHES SÉMANTIQUES) ---
 function semanticParagraphAnalysis(sourceText) {
   if (!sourceText) return [];
 
@@ -88,16 +116,14 @@ function semanticParagraphAnalysis(sourceText) {
     if (sentences.length === 0) return;
 
     const mainSentence = sentences[0];
-    const explanation = block;
-
     const words = mainSentence.replace(/[,;:!?()]/g, '').split(/\s+/);
     const keyWords = words.filter(w => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()));
     const concept = keyWords.length > 0 ? keyWords.slice(0, 3).join(' ') : mainSentence.slice(0, 25);
 
-    if (concept.length > 3 && explanation.length > 20) {
+    if (concept.length > 3 && block.length > 20) {
       semanticPairs.push({
         term: concept.charAt(0).toUpperCase() + concept.slice(1),
-        def: explanation.charAt(0).toUpperCase() + explanation.slice(1),
+        def: block.charAt(0).toUpperCase() + block.slice(1),
         source: block
       });
     }
@@ -197,7 +223,10 @@ export default function App() {
   const [flashcards, setFlashcards] = useState([]);
   const [fillBlanks, setFillBlanks] = useState([]);
   const [rawInputText, setRawInputText] = useState('');
+  
+  // Clé API enregistrée
   const [apiKey, setApiKey] = useState('');
+  const [isKeySavedSuccess, setIsKeySavedSuccess] = useState(false);
 
   const [sessionSteps, setSessionSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
@@ -220,6 +249,7 @@ export default function App() {
   const [ocrProgress, setOcrProgress] = useState('');
   const [history, setHistory] = useState([]);
 
+  // Chargement initial des données enregistrées
   useEffect(() => {
     try {
       const savedHistory = localStorage.getItem('studysnap_history');
@@ -240,7 +270,9 @@ export default function App() {
 
   const handleSaveApiKey = (key) => {
     setApiKey(key);
-    localStorage.setItem('studysnap_apikey', key);
+    localStorage.setItem('studysnap_apikey', key.trim());
+    setIsKeySavedSuccess(true);
+    setTimeout(() => setIsKeySavedSuccess(false), 3000);
   };
 
   const saveHistory = useCallback((result) => {
@@ -394,11 +426,11 @@ export default function App() {
 
     try {
       let generated;
-      if (apiKey && apiKey.trim().length > 10) {
-        setOcrProgress("Formulation intelligente via l'IA Externe...");
+      if (apiKey && apiKey.trim().length > 5) {
+        setOcrProgress("Génération intelligente avec l'IA...");
         generated = await generateExercisesWithExternalAI(text, apiKey);
       } else {
-        setOcrProgress("Analyse locale sémantique...");
+        setOcrProgress("Analyse sémantique locale...");
         generated = generateAllExercisesLocal(text);
       }
 
@@ -419,7 +451,7 @@ export default function App() {
       startSession(generated.questions, generated.flashcards, generated.fillBlanks);
     } catch (e) {
       console.error(e);
-      setUploadError(e.message || "Erreur de génération avec l'IA. Bascule locale recommandée.");
+      setUploadError(e.message || "Erreur de connexion IA. Assurez-vous d'utiliser une clé valide.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -479,7 +511,7 @@ export default function App() {
       setOcrProgress('');
       await handleProcessText(text);
     } catch (err) {
-      setUploadError(err.message || "Erreur lors de la lecture.");
+      setUploadError(err.message || "Erreur de lecture de l'image.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -494,7 +526,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction du PDF...");
+        setOcrProgress("Extraction du texte PDF...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -547,7 +579,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.4 (IA Direct)</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.5</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -569,26 +601,33 @@ export default function App() {
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
                 <h2 className="text-2xl font-bold text-slate-900">IA & Génération Pédagogique</h2>
-                <p className="text-slate-600 text-sm mt-1">L'IA analyse le document pour formaliser des exercices riches et réalistes.</p>
+                <p className="text-slate-600 text-sm mt-1">Insérez votre clé Gemini pour débloquer la génération IA sur-mesure.</p>
               </div>
 
-              {/* Champ Clé API OpenAI / Gemini */}
+              {/* SAUVEGARDE PERMANENTE DE LA CLÉ API */}
               <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 space-y-2">
-                <div className="flex items-center space-x-2">
-                  <Cpu className="w-4 h-4 text-indigo-600" />
-                  <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Génération IA Externe (Optionnelle)</span>
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center space-x-2">
+                    <Cpu className="w-4 h-4 text-indigo-600" />
+                    <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Configuration Clé API (Gemini / OpenAI)</span>
+                  </div>
+                  {isKeySavedSuccess && <span className="text-xs text-green-600 font-semibold flex items-center space-x-1"><CheckCircle2 className="w-3.5 h-3.5" /> <span>Clé enregistrée !</span></span>}
                 </div>
-                <div className="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-slate-200">
+
+                <div className="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-inner">
                   <Key className="w-4 h-4 text-slate-400 flex-shrink-0" />
                   <input
                     type="password"
                     value={apiKey}
                     onChange={(e) => handleSaveApiKey(e.target.value)}
-                    placeholder="Clé API OpenAI (ex: sk-...)"
-                    className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400"
+                    placeholder="Collez votre clé Gemini (AIzaSy...) ou OpenAI (sk-...)"
+                    className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400 font-mono"
                   />
+                  <button onClick={() => handleSaveApiKey(apiKey)} className="p-1 text-indigo-600 hover:text-indigo-800" title="Enregistrer la clé">
+                    <Save className="w-4 h-4" />
+                  </button>
                 </div>
-                <p className="text-[11px] text-slate-500 italic">Si aucune clé n'est saisie, l'application utilise automatiquement le moteur local sémantique.</p>
+                <p className="text-[11px] text-slate-500">🔒 Votre clé est enregistrée localement dans votre navigateur et n'est redemandée à aucun moment.</p>
               </div>
 
               <div className="space-y-2">
@@ -662,7 +701,7 @@ export default function App() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
                 >
                   <Sparkles className="w-5 h-5 text-amber-300" />
-                  <span>{isAnalyzing ? (ocrProgress || "Génération des exercices...") : "Générer avec l'IA & Lancer le Parcours"}</span>
+                  <span>{isAnalyzing ? (ocrProgress || "Génération des exercices...") : "Générer les exercices & Lancer"}</span>
                 </button>
               </div>
 
@@ -740,11 +779,11 @@ export default function App() {
                   </div>
                 )}
 
-                {/* QCM IA */}
+                {/* QCM */}
                 {currentStep.type === 'quiz' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full">Question QCM IA</span>
+                      <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full">Question QCM</span>
                       <div className="flex items-center space-x-2">
                         <button onClick={() => speakText(currentStep.data.question)} className="p-1.5 text-slate-500 hover:text-indigo-600">
                           <Volume2 className="w-4 h-4" />
