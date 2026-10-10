@@ -1,40 +1,10 @@
-import React, { useState, useEffect } from 'react';
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, Volume2, Mic 
 } from 'lucide-react';
-
-const loadPdfJs = (): Promise<any> => {
-  return new Promise((resolve, reject) => {
-    if ((window as any).pdfjsLib) {
-      resolve((window as any).pdfjsLib);
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-    script.onload = () => {
-      const pdfjsLib = (window as any).pdfjsLib;
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      resolve(pdfjsLib);
-    };
-    script.onerror = () => reject(new Error("Impossible de charger PDF.js"));
-    document.head.appendChild(script);
-  });
-};
-
-const extractTextFromPdf = async (file: File): Promise<string> => {
-  const pdfjsLib = await loadPdfJs();
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = '';
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const tokenized = await page.getTextContent();
-    const pageText = tokenized.items.map((item: any) => item.str).join(' ');
-    fullText += pageText + '\n';
-  }
-  return fullText;
-};
 
 type ActiveTab = 'home' | 'quiz' | 'flashcards' | 'fillblank' | 'history';
 
@@ -103,7 +73,7 @@ const DEFAULT_FILLBLANKS: FillInTheBlank[] = [
 ];
 
 const speakText = (text: string) => {
-  if ('speechSynthesis' in window) {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'fr-FR';
@@ -240,21 +210,48 @@ export default function StudySnapApp() {
     }
   }, []);
 
-  const saveHistory = (result: QuizResult) => {
-    const updated = [result, ...history];
-    setHistory(updated);
-    localStorage.setItem('studysnap_history', JSON.stringify(updated));
-  };
+  const saveHistory = useCallback((result: QuizResult) => {
+    setHistory((prev) => {
+      const updated = [result, ...prev];
+      localStorage.setItem('studysnap_history', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const handleNextQuestion = useCallback(() => {
+    setCurrentQuestionIndex((prevIdx) => {
+      if (prevIdx + 1 < questions.length) {
+        setSelectedAnswer(null);
+        setTimeLeft(30);
+        return prevIdx + 1;
+      } else {
+        setIsQuizFinished(true);
+        setIsTimerActive(false);
+        const total = questions.length;
+        setScore((currentScore) => {
+          const percentage = Math.round((currentScore / total) * 100);
+          saveHistory({ 
+            date: new Date().toLocaleDateString('fr-FR', { hour: '2-digit', minute: '2-digit' }), 
+            score: currentScore, 
+            total, 
+            percentage 
+          });
+          return currentScore;
+        });
+        return prevIdx;
+      }
+    });
+  }, [questions.length, saveHistory]);
 
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: ReturnType<typeof setInterval>;
     if (isTimerActive && timeLeft > 0 && !isQuizFinished && activeTab === 'quiz') {
       timer = setInterval(() => setTimeLeft((p) => p - 1), 1000);
     } else if (timeLeft === 0 && isTimerActive && !isQuizFinished) {
       handleNextQuestion();
     }
     return () => clearInterval(timer);
-  }, [isTimerActive, timeLeft, isQuizFinished, activeTab]);
+  }, [isTimerActive, timeLeft, isQuizFinished, activeTab, handleNextQuestion]);
 
   const startQuiz = (customQ?: Question[]) => {
     if (customQ) setQuestions(customQ);
@@ -272,20 +269,6 @@ export default function StudySnapApp() {
     setSelectedAnswer(idx);
     if (idx === questions[currentQuestionIndex]?.correctAnswer) {
       setScore((prev) => prev + 1);
-    }
-  };
-
-  const handleNextQuestion = () => {
-    if (currentQuestionIndex + 1 < questions.length) {
-      setCurrentQuestionIndex((prev) => prev + 1);
-      setSelectedAnswer(null);
-      setTimeLeft(30);
-    } else {
-      setIsQuizFinished(true);
-      setIsTimerActive(false);
-      const total = questions.length;
-      const percentage = Math.round((score / total) * 100);
-      saveHistory({ date: new Date().toLocaleDateString('fr-FR', { hour: '2-digit', minute: '2-digit' }), score, total, percentage });
     }
   };
 
@@ -314,40 +297,34 @@ export default function StudySnapApp() {
     setIsAnalyzing(true);
 
     try {
-      if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        const extractedText = await extractTextFromPdf(file);
-        if (!extractedText.trim()) {
-          throw new Error("Impossible d'extraire du texte de ce fichier PDF.");
-        }
-        setRawInputText(extractedText);
-        handleProcessText(extractedText);
-      } else if (file.name.endsWith('.json')) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        if (file.name.endsWith('.json')) {
           try {
-            const parsed = JSON.parse(e.target?.result as string);
+            const parsed = JSON.parse(content);
             if (Array.isArray(parsed)) {
               setQuestions(parsed);
               setIsAnalyzing(false);
               startQuiz(parsed);
+              return;
             }
           } catch {
             setUploadError("Format JSON invalide.");
             setIsAnalyzing(false);
+            return;
           }
-        };
-        reader.readAsText(file);
-      } else {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const content = e.target?.result as string;
-          setRawInputText(content);
-          handleProcessText(content);
-        };
-        reader.readAsText(file);
-      }
-    } catch (err: any) {
-      setUploadError(err.message || "Erreur lors de la lecture du fichier.");
+        }
+        setRawInputText(content);
+        handleProcessText(content);
+      };
+      reader.onerror = () => {
+        setUploadError("Erreur lors de la lecture du fichier.");
+        setIsAnalyzing(false);
+      };
+      reader.readAsText(file);
+    } catch {
+      setUploadError("Erreur lors du traitement du fichier.");
       setIsAnalyzing(false);
     }
   };
@@ -395,16 +372,15 @@ export default function StudySnapApp() {
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
                 <h2 className="text-2xl font-bold text-slate-900">Générez vos exercices de révision</h2>
-                <p className="text-slate-600 text-sm mt-1">Déposez un fichier PDF/TXT ou collez votre cours pour créer vos QCM et exercices vocaux.</p>
+                <p className="text-slate-600 text-sm mt-1">Collez votre cours ou importez un fichier texte pour générer instantanément vos exercices.</p>
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Option 1 : Charger un document (.pdf / .txt)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Option 1 : Charger un fichier (.txt / .json)</label>
                 <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/40 rounded-xl p-6 hover:border-indigo-400 transition cursor-pointer relative text-center">
-                  <input type="file" onChange={handleFileUpload} accept=".pdf,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <input type="file" onChange={handleFileUpload} accept=".txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                   <Upload className="w-8 h-8 text-indigo-500 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-slate-700">Cliquez ou glissez un PDF / texte ici</p>
-                  <p className="text-xs text-slate-400 mt-1">Extraction automatique du texte PDF intégrée</p>
+                  <p className="text-sm font-semibold text-slate-700">Cliquez ou glissez un fichier texte ici</p>
                 </div>
               </div>
 
@@ -429,7 +405,7 @@ export default function StudySnapApp() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-2.5 rounded-xl transition flex items-center justify-center space-x-2"
                 >
                   <Sparkles className="w-4 h-4" />
-                  <span>{isAnalyzing ? "Analyse du document..." : "Générer le Quiz"}</span>
+                  <span>{isAnalyzing ? "Analyse en cours..." : "Générer les exercices"}</span>
                 </button>
               </div>
 
