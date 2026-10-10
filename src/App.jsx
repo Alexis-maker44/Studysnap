@@ -10,7 +10,7 @@ const STOP_WORDS = new Set([
   'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'l', 'ce', 'cette', 'ces',
   'mon', 'ton', 'son', 'ma', 'ta', 'sa', 'mes', 'tes', 'ses', 'nos', 'vos', 'leurs',
   'qui', 'que', 'quoi', 'dont', 'où', 'quand', 'comment', 'pourquoi', 'quel', 'quelle', 'quels', 'quelles',
-  'est', 'sont', 'a', 'ont', 'fait', 'fais', 'font', 'pour', 'dans', 'sur', 'avec', 'sans', 'par', 'pour',
+  'est', 'sont', 'a', 'ont', 'fait', 'fais', 'font', 'pour', 'dans', 'sur', 'avec', 'sans', 'par',
   'et', 'ou', 'mais', 'donc', 'car', 'ni', 'or', 'plus', 'moins', 'tres', 'aussi', 'bien', 'autre', 'aux'
 ]);
 
@@ -23,173 +23,160 @@ const speakText = (text) => {
   }
 };
 
-// --- NETTOYAGE ROBUSTE DU TEXTE (OCR & PDF) ---
+// --- NETTOYAGE ROBUSTE & DÉTECTION DE SCHÉMAS/LÉGENDES ---
 function cleanExtractedText(rawText) {
   if (!rawText) return [];
 
   return rawText
-    // Supprime les caractères non lisibles d'OCR
     .replace(/[^\w\sàâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ.,;:!?'"-]/g, ' ')
     .split(/(?:[.!?\n]+)/)
     .map((sentence) => sentence.replace(/^[-•*0-9.]+\s*/, '').trim())
     .filter((sentence) => {
-      // Filtrer les bribes de phrases trop courtes ou sans mots pertinents
       const words = sentence.split(/\s+/).filter(w => w.length > 2);
-      return sentence.length >= 25 && words.length >= 4;
+      // Conserve les phrases de cours ou les légendes de schémas (marquées par Figure, Schéma, Tableau)
+      const isSchemaOrFigure = /^(figure|schéma|tableau|graphique|légende|source)\b/i.test(sentence);
+      return (sentence.length >= 20 && words.length >= 3) || isSchemaOrFigure;
     });
 }
 
-// --- EXTRACTEUR DE CONCEPTS CLES (VALIDES SEULEMENT) ---
+// --- EXTRACTION DE CONCEPTS CLES ---
 function extractKeyConcept(sentence) {
   const cleanSentence = sentence.replace(/[,;:!?()]/g, '');
   const words = cleanSentence.split(/\s+/);
-
-  // Chercher un mot long (>= 5 lettres) qui n'est pas dans les STOP_WORDS
   const validWords = words.filter((w) => {
     const lower = w.toLowerCase();
-    return w.length >= 5 && !STOP_WORDS.has(lower) && !/^\d+$/.test(w);
+    return w.length >= 4 && !STOP_WORDS.has(lower) && !/^\d+$/.test(w);
   });
-
   return validWords.length > 0 ? validWords[0] : null;
 }
 
-// --- MOTEUR DE GÉNÉRATION INTELLIGENT ET FILTRÉ ---
+// --- MOTEUR DE GÉNÉRATION COUVRANT TOUT LE DOCUMENT AVEC DISTRACTEURS SUBTILS ---
 function generateAllExercisesFromText(sourceText) {
   const cleanSentences = cleanExtractedText(sourceText);
+
+  // Échantillonnage intelligent pour couvrir tout le document (du début à la fin)
+  let sampledSentences = cleanSentences;
+  if (cleanSentences.length > 15) {
+    const step = Math.max(1, Math.floor(cleanSentences.length / 12));
+    sampledSentences = [];
+    for (let i = 0; i < cleanSentences.length; i += step) {
+      sampledSentences.push(cleanSentences[i]);
+    }
+  }
+
+  const rawPairs = [];
+
+  sampledSentences.forEach((sentence) => {
+    const defMatch = sentence.match(/^(.{3,40}?)\s+(est|sont|désigne|représente|permet de|signifie|consiste à)\s+(.+)/i);
+    const schemaMatch = sentence.match(/^(figure|schéma|tableau|graphique)\s*([0-9a-z-]*)\s*[:–-]\s*(.+)/i);
+
+    if (defMatch) {
+      const subject = defMatch[1].trim().replace(/^(Le|La|Les|Un|Une|L'|Le concept de)\s+/i, '');
+      const definition = defMatch[3].trim();
+      if (subject.length >= 3 && !STOP_WORDS.has(subject.toLowerCase()) && definition.length >= 8) {
+        rawPairs.push({ term: subject, def: definition, source: sentence });
+      }
+    } else if (schemaMatch) {
+      const label = `${schemaMatch[1]} ${schemaMatch[2]}`.trim();
+      const desc = schemaMatch[3].trim();
+      rawPairs.push({ term: label, def: desc, source: sentence });
+    } else {
+      const keyConcept = extractKeyConcept(sentence);
+      if (keyConcept) {
+        rawPairs.push({ term: keyConcept, def: sentence, source: sentence });
+      }
+    }
+  });
+
+  // Dédoublonnage des termes
+  const uniquePairs = [];
+  const seenTerms = new Set();
+  rawPairs.forEach(p => {
+    const lowerTerm = p.term.toLowerCase();
+    if (!seenTerms.has(lowerTerm)) {
+      seenTerms.add(lowerTerm);
+      uniquePairs.push(p);
+    }
+  });
 
   const generatedQuestions = [];
   const generatedFlashcards = [];
   const generatedFillBlanks = [];
 
-  cleanSentences.forEach((sentence, index) => {
-    // 1. Détection des définitions explicites (ex: "Le hook useState permet de...")
-    const defMatch = sentence.match(/^(.{3,40}?)\s+(est|sont|désigne|représente|permet de|signifie|consiste à)\s+(.+)/i);
+  uniquePairs.forEach((pair, index) => {
+    // 1. Flashcards
+    generatedFlashcards.push({
+      id: index + 1,
+      front: pair.term.charAt(0).toUpperCase() + pair.term.slice(1),
+      back: pair.def.charAt(0).toUpperCase() + pair.def.slice(1)
+    });
 
-    if (defMatch) {
-      const subject = defMatch[1].trim().replace(/^(Le|La|Les|Un|Une|L'|Le concept de)\s+/i, '');
-      const definition = defMatch[3].trim();
+    // 2. Phrases à trous
+    const sentenceWithBlank = pair.source.replace(new RegExp(`\\b${pair.term}\\b`, 'gi'), '[___]');
+    if (sentenceWithBlank !== pair.source) {
+      generatedFillBlanks.push({
+        id: index + 1,
+        sentenceWithBlank,
+        missingWord: pair.term,
+        explanation: pair.source
+      });
+    }
 
-      // Vérifier que le sujet n'est pas un mot parasite
-      if (subject.length >= 3 && !STOP_WORDS.has(subject.toLowerCase()) && definition.length >= 10) {
-        
-        // Flashcard propre
-        generatedFlashcards.push({
-          id: generatedFlashcards.length + 1,
-          front: subject.charAt(0).toUpperCase() + subject.slice(1),
-          back: definition.charAt(0).toUpperCase() + definition.slice(1)
-        });
-
-        // QCM avec propositions sensées
-        const correctText = definition;
-        const wrongOptions = [
-          `Un mécanisme indépendant non lié à ${subject}.`,
-          `Un comportement obsolète dans ce contexte.`,
-          `Une erreur de formulation courante.`
-        ];
-        const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
-
-        generatedQuestions.push({
-          id: generatedQuestions.length + 1,
-          question: `Quelle est la fonction ou définition de « ${subject} » ?`,
-          options: allOptions,
-          correctAnswer: allOptions.indexOf(correctText),
-          explanation: sentence
-        });
-
-        // Phrase à trous sur un vrai mot-clé
-        const keyConcept = extractKeyConcept(sentence) || subject;
-        const sentenceWithBlank = sentence.replace(new RegExp(`\\b${keyConcept}\\b`, 'gi'), '[___]');
-
-        if (sentenceWithBlank !== sentence) {
-          generatedFillBlanks.push({
-            id: generatedFillBlanks.length + 1,
-            sentenceWithBlank,
-            missingWord: keyConcept,
-            explanation: sentence
-          });
-        }
-      }
-    } else {
-      // 2. Traitement pour phrases informelles avec mots-clés riches
-      const keyConcept = extractKeyConcept(sentence);
-
-      if (keyConcept && generatedQuestions.length < 8) {
-        generatedFlashcards.push({
-          id: generatedFlashcards.length + 1,
-          front: keyConcept.charAt(0).toUpperCase() + keyConcept.slice(1),
-          back: sentence
-        });
-
-        const sentenceWithBlank = sentence.replace(new RegExp(`\\b${keyConcept}\\b`, 'gi'), '[___]');
-        if (sentenceWithBlank !== sentence) {
-          generatedFillBlanks.push({
-            id: generatedFillBlanks.length + 1,
-            sentenceWithBlank,
-            missingWord: keyConcept,
-            explanation: sentence
-          });
-        }
-
-        const correctText = sentence;
-        const wrongOptions = [
-          "Cette affirmation est contredite par le cours.",
-          "Information non pertinente par rapport au sujet.",
-          "Aucune de ces propositions n'est exacte."
-        ];
-        const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
-
-        generatedQuestions.push({
-          id: generatedQuestions.length + 1,
-          question: `Quelle affirmation est exacte concernant « ${keyConcept} » ?`,
-          options: allOptions,
-          correctAnswer: allOptions.indexOf(correctText),
-          explanation: sentence
-        });
+    // 3. QCM avec de VRAIS distracteurs pris ailleurs dans le document (subtil & stimulant)
+    const correctText = pair.def;
+    const otherDefs = uniquePairs.filter(p => p.term !== pair.term).map(p => p.def);
+    
+    let wrongOptions = [];
+    while (wrongOptions.length < 3 && otherDefs.length > 0) {
+      const randIdx = Math.floor(Math.random() * otherDefs.length);
+      const selectedWrong = otherDefs.splice(randIdx, 1)[0];
+      if (!wrongOptions.includes(selectedWrong) && selectedWrong !== correctText) {
+        wrongOptions.push(selectedWrong);
       }
     }
+
+    // Fallback si le texte est court
+    const fallbackWrong = [
+      `Une notion théorique secondaire abordée dans une autre section du cours.`,
+      `Un mécanisme inverse ne s'appliquant pas directement à ${pair.term}.`,
+      `Une confusion fréquente avec les prérequis du chapitre.`
+    ];
+    while (wrongOptions.length < 3) {
+      const fb = fallbackWrong[wrongOptions.length];
+      if (!wrongOptions.includes(fb)) wrongOptions.push(fb);
+    }
+
+    const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
+
+    generatedQuestions.push({
+      id: index + 1,
+      question: `D'après l'analyse du document, que désigne ou caractérise « ${pair.term} » ?`,
+      options: allOptions,
+      correctAnswer: allOptions.indexOf(correctText),
+      explanation: pair.source
+    });
   });
 
-  // Sécurité par défaut si le texte est illisible ou trop court
-  const defaultFallbackQ = [
-    {
-      id: 1,
-      question: "Exemple : Quelle est la meilleure approche de révision ?",
-      options: ["Réviser activement avec des Quiz", "Lire passivement sans pratiquer", "Apprendre par cœur sans comprendre", "Ignorer les retours d'erreurs"],
-      correctAnswer: 0,
-      explanation: "La révision active permet une meilleure rétention en mémoire."
-    }
-  ];
-
-  const defaultFallbackFc = [
-    { id: 1, front: "Rappel", back: "Veuillez fournir un texte avec des phrases complètes pour générer des exercices sur-mesure." }
-  ];
-
-  const defaultFallbackFb = [
-    { id: 1, sentenceWithBlank: "La révision [___] est plus efficace.", missingWord: "active", explanation: "L'apprentissage actif stimule la mémoire." }
-  ];
+  const defaultQ = [{ id: 1, question: "Veuillez fournir un cours plus détaillé.", options: ["OK"], correctAnswer: 0, explanation: "Document trop court." }];
+  const defaultFc = [{ id: 1, front: "Information", back: "Veuillez importer un document complet." }];
+  const defaultFb = [{ id: 1, sentenceWithBlank: "Document [___].", missingWord: "vide", explanation: "Aucun texte." }];
 
   return {
-    questions: generatedQuestions.length > 0 ? generatedQuestions : defaultFallbackQ,
-    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : defaultFallbackFc,
-    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : defaultFallbackFb
+    questions: generatedQuestions.length > 0 ? generatedQuestions : defaultQ,
+    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : defaultFc,
+    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : defaultFb
   };
 }
 
 function buildSessionSteps(questions, flashcards, fillBlanks) {
   const steps = [];
+  flashcards.slice(0, 4).forEach((fc) => steps.push({ type: 'flashcard', data: fc }));
 
-  // 1. Découverte (Flashcards)
-  flashcards.slice(0, 3).forEach((fc) => {
-    steps.push({ type: 'flashcard', data: fc });
-  });
-
-  // 2. Entraînement mixé (QCM + Trous)
   const maxInter = Math.max(questions.length, fillBlanks.length);
   for (let i = 0; i < maxInter; i++) {
     if (questions[i]) steps.push({ type: 'quiz', data: questions[i] });
     if (fillBlanks[i]) steps.push({ type: 'fillblank', data: fillBlanks[i] });
   }
-
   return steps;
 }
 
@@ -206,7 +193,6 @@ export default function App() {
   const [fillBlanks, setFillBlanks] = useState([]);
   const [rawInputText, setRawInputText] = useState('');
 
-  // GAMIFICATION
   const [sessionSteps, setSessionSteps] = useState([]);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [lives, setLives] = useState(3);
@@ -217,7 +203,7 @@ export default function App() {
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [userBlankInput, setUserBlankInput] = useState('');
   const [stepResultState, setStepResultState] = useState(null);
-  const [timeLeft, setTimeLeft] = useState(25);
+  const [timeLeft, setTimeLeft] = useState(30);
   const [isTimerActive, setIsTimerActive] = useState(false);
 
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -290,7 +276,7 @@ export default function App() {
     setSelectedAnswer(null);
     setUserBlankInput('');
     setStepResultState(null);
-    setTimeLeft(25);
+    setTimeLeft(30);
     setIsTimerActive(true);
     setActiveTab('session');
   }, [questions, flashcards, fillBlanks]);
@@ -315,7 +301,7 @@ export default function App() {
       setSelectedAnswer(null);
       setUserBlankInput('');
       setStepResultState(null);
-      setTimeLeft(25);
+      setTimeLeft(30);
       setIsTimerActive(true);
     } else {
       setIsSessionFinished(true);
@@ -380,7 +366,7 @@ export default function App() {
       setStepResultState('incorrect');
       setLives((l) => Math.max(0, l - 1));
       setCombo(0);
-      speakText("Incorrect. La réponse était " + currentStep.data.missingWord);
+      speakText("Incorrect. C'était " + currentStep.data.missingWord);
     }
   };
 
@@ -410,7 +396,7 @@ export default function App() {
         startSession(generated.questions, generated.flashcards, generated.fillBlanks);
       } catch (e) {
         console.error(e);
-        setUploadError("Une erreur est survenue lors du filtrage du texte.");
+        setUploadError("Une erreur est survenue lors de l'analyse globale.");
         setIsAnalyzing(false);
       }
     }, 300);
@@ -449,7 +435,7 @@ export default function App() {
 
   const processImageOCR = async (imageSrc) => {
     setIsAnalyzing(true);
-    setOcrProgress("Extraction & Filtrage intelligent de la photo...");
+    setOcrProgress("Analyse globale des schémas & texte de la photo...");
 
     try {
       if (!window.Tesseract) {
@@ -464,13 +450,13 @@ export default function App() {
       await worker.terminate();
 
       const text = ret.data.text;
-      if (!text || !text.trim()) throw new Error("Aucun texte lisible trouvé.");
+      if (!text || !text.trim()) throw new Error("Aucun texte ou schéma lisible trouvé.");
 
       setRawInputText(text);
       setOcrProgress('');
       handleProcessText(text);
     } catch (err) {
-      setUploadError(err.message || "Erreur lors de la numérisation.");
+      setUploadError(err.message || "Erreur de lecture de l'image.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -485,7 +471,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction & Filtrage du PDF...");
+        setOcrProgress("Extraction complète du PDF (toutes les pages)...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -507,7 +493,7 @@ export default function App() {
           fullText += tokenized.items.map((item) => item.str).join(' ') + '\n';
         }
 
-        if (!fullText.trim()) throw new Error("Le PDF ne contient pas de texte lisible.");
+        if (!fullText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
 
         setRawInputText(fullText);
         setOcrProgress('');
@@ -525,7 +511,7 @@ export default function App() {
         reader.readAsText(file);
       }
     } catch (err) {
-      setUploadError(err.message || "Erreur lors du traitement.");
+      setUploadError(err.message || "Erreur lors du traitement du fichier.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -538,7 +524,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.1</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.2</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -559,8 +545,8 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Importation intelligente du cours</h2>
-                <p className="text-slate-600 text-sm mt-1">Le texte est filtré automatiquement pour éliminer le bruit et créer des exercices sensés.</p>
+                <h2 className="text-2xl font-bold text-slate-900">Analyse globale de tout le document</h2>
+                <p className="text-slate-600 text-sm mt-1">Le contenu des pages et des schémas est extrait pour créer des QCM stimulants et exigeants.</p>
               </div>
 
               <div className="space-y-2">
@@ -591,7 +577,7 @@ export default function App() {
               <div className="border-t border-slate-100 my-2"></div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Numériser votre document (PDF / Photo)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner l'ensemble du document (PDF ou Photo)</label>
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
                     <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
@@ -608,7 +594,7 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <button onClick={startCamera} className="p-4 border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/50 rounded-xl flex flex-col items-center justify-center transition">
                       <Camera className="w-6 h-6 text-indigo-600 mb-1" />
-                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo du cours</span>
+                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo du schéma/cours</span>
                     </button>
                     <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
                       <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
@@ -634,7 +620,7 @@ export default function App() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
                 >
                   <Sparkles className="w-5 h-5 text-amber-300" />
-                  <span>{isAnalyzing ? (ocrProgress || "Filtrage & Génération...") : "Lancer le Parcours de Révision"}</span>
+                  <span>{isAnalyzing ? (ocrProgress || "Génération des questions stimulantes...") : "Lancer le Parcours de Révision"}</span>
                 </button>
               </div>
 
@@ -712,18 +698,18 @@ export default function App() {
                   </div>
                 )}
 
-                {/* QCM */}
+                {/* QCM AVEC CHOIX SUBTILS */}
                 {currentStep.type === 'quiz' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full">Question QCM</span>
+                      <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full">Question QCM Avancée</span>
                       <div className="flex items-center space-x-2">
                         <button onClick={() => speakText(currentStep.data.question)} className="p-1.5 text-slate-500 hover:text-indigo-600">
                           <Volume2 className="w-4 h-4" />
                         </button>
                         <div className="flex items-center space-x-1 text-slate-500 text-xs font-mono font-bold">
                           <Timer className="w-3.5 h-3.5" />
-                          <span className={timeLeft < 8 ? 'text-red-500' : ''}>{timeLeft}s</span>
+                          <span className={timeLeft < 10 ? 'text-red-500' : ''}>{timeLeft}s</span>
                         </div>
                       </div>
                     </div>
@@ -745,8 +731,8 @@ export default function App() {
                             className={`w-full text-left p-3.5 border-2 rounded-xl transition flex justify-between items-center text-sm ${btnStyle}`}
                           >
                             <span>{option}</span>
-                            {stepResultState !== null && idx === currentStep.data.correctAnswer && <CheckCircle2 className="w-5 h-5 text-green-600" />}
-                            {stepResultState !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && <XCircle className="w-5 h-5 text-red-500" />}
+                            {stepResultState !== null && idx === currentStep.data.correctAnswer && <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />}
+                            {stepResultState !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && <XCircle className="w-5 h-5 text-red-500 flex-shrink-0" />}
                           </button>
                         );
                       })}
@@ -754,7 +740,7 @@ export default function App() {
 
                     {stepResultState !== null && (
                       <div className="p-4 bg-slate-50 rounded-xl text-xs text-slate-600 border border-slate-100">
-                        <p className="font-semibold text-slate-800 mb-1">Explication :</p>
+                        <p className="font-semibold text-slate-800 mb-1">Extrait source de référence :</p>
                         {currentStep.data.explanation}
                       </div>
                     )}
@@ -801,7 +787,7 @@ export default function App() {
                           Vérifier
                         </button>
                       ) : (
-                        <button onClick={advanceToNextStep} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-medium transition flex items-center space-x-1">
+                        <button onClick={advanceToNextStep} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2.5 rounded-xl font-medium transition flex items-center space-x-1">
                           <span>Suivant</span>
                           <ChevronRight className="w-4 h-4" />
                         </button>
@@ -814,7 +800,7 @@ export default function App() {
               <div className="text-center py-6 space-y-6">
                 <Award className="w-16 h-16 text-amber-500 mx-auto" />
                 <h2 className="text-2xl font-bold text-slate-800">
-                  {lives > 0 ? "Session terminée !" : "Plus de vies disponible !"}
+                  {lives > 0 ? "Session terminée avec succès !" : "Plus de vies disponible !"}
                 </h2>
                 
                 <div className="bg-indigo-50 p-6 rounded-2xl inline-block space-y-2">
