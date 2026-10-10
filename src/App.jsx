@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
-  RefreshCw, Award, BookOpen, Sparkles, Upload, BarChart2, Home, Brain, 
-  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save
+  RefreshCw, Award, BookOpen, Sparkles, Upload, Home, Brain, 
+  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save, RotateCw
 } from 'lucide-react';
 
 const STOP_WORDS = new Set([
@@ -22,32 +22,44 @@ const speakText = (text) => {
   }
 };
 
-// --- APPEL EXTERNE ROBUSTE (GEMINI / OPENAI) ---
+// --- APPEL OPTIMISÉ POUR IA GEMINI / OPENAI ---
 async function generateExercisesWithExternalAI(sourceText, apiKey) {
   const cleanKey = apiKey.trim();
   const isGeminiKey = cleanKey.startsWith('AIza') || !cleanKey.startsWith('sk-');
 
   const promptText = `
-Tu es un professeur expert. Analyse le cours suivant et génère exactement 5 questions sous forme de JSON strict.
-Contenu du cours :
-"""${sourceText.slice(0, 4000)}"""
+Tu es un professeur expert. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
 
-Format de réponse (Réponds EXCLUSIVEMENT avec cet objet JSON valide, sans texte avant ni après, sans balises markdown de type code si possible) :
+CONSIGNES STRICTES :
+1. "questions" : Crée 5 QCM de niveau universitaire/lycée. Pour chaque question :
+   - 'question' : pose une vraie question de réflexion sur le fond du cours.
+   - 'options' : 4 réponses crédibles et élaborées (1 bonne + 3 faux pièges très réalistes tirés du contexte).
+   - 'correctAnswer' : l'index (0, 1, 2 ou 3) de la bonne réponse.
+   - 'explanation' : une explication claire.
+2. "flashcards" : Crée 5 cartes mémoires. 
+   - 'front' : SEULEMENT le nom du concept, terme ou mot-clé (2 à 5 mots maximum). NE METS PAS la réponse sur le recto !
+   - 'back' : La définition complète ou explication de ce concept.
+3. "fillBlanks" : 3 à 5 phrases à trous portant sur des termes techniques essentiels.
+
+TEXTE DU COURS :
+"""${sourceText.slice(0, 5000)}"""
+
+Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'introduction, AUCUNE balise markdown extra) :
 {
   "questions": [
     {
       "id": 1,
-      "question": "Intitulé clair et précis d'une question sur le cours",
-      "options": ["Bonne réponse", "Mauvaise réponse 1 crédible", "Mauvaise réponse 2 crédible", "Mauvaise réponse 3 crédible"],
+      "question": "Quelle est la caractéristique principale de... ?",
+      "options": ["Bonne réponse", "Mauvaise réponse 1 plausible", "Mauvaise réponse 2 plausible", "Mauvaise réponse 3 plausible"],
       "correctAnswer": 0,
-      "explanation": "Explication pédagogique basée sur le cours."
+      "explanation": "Explication basée sur le cours."
     }
   ],
   "flashcards": [
-    { "id": 1, "front": "Terme ou concept clé", "back": "Définition ou explication exacte." }
+    { "id": 1, "front": "Nom du concept", "back": "Explication complète du concept." }
   ],
   "fillBlanks": [
-    { "id": 1, "sentenceWithBlank": "La phrase avec un [___] à compléter.", "missingWord": "mot", "explanation": "Explication de la notion." }
+    { "id": 1, "sentenceWithBlank": "La fonction [___] permet de traiter les données.", "missingWord": "principale", "explanation": "Rappel de la règle." }
   ]
 }
 `;
@@ -55,7 +67,6 @@ Format de réponse (Réponds EXCLUSIVEMENT avec cet objet JSON valide, sans text
   let rawContent = '';
 
   if (isGeminiKey) {
-    // Essai successif de plusieurs modèles Gemini pour éviter les erreurs 404 de version
     const modelsToTry = ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-latest'];
     let response = null;
 
@@ -72,18 +83,17 @@ Format de réponse (Réponds EXCLUSIVEMENT avec cet objet JSON valide, sans text
         });
         if (response.ok) break;
       } catch (e) {
-        // Essayer le modèle suivant
+        // Essai du modèle suivant
       }
     }
 
     if (!response || !response.ok) {
-      throw new Error("Erreur de connexion à l'API Gemini. Bascule automatique sur le mode local activée.");
+      throw new Error("Erreur avec la clé Gemini. Bascule automatique sur le moteur local.");
     }
 
     const data = await response.json();
     rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   } else {
-    // --- APPEL OPENAI ---
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -109,14 +119,14 @@ Format de réponse (Réponds EXCLUSIVEMENT avec cet objet JSON valide, sans text
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL DE SECOURS (SÉMANTIQUE) ---
+// --- MOTEUR LOCAL DE SECOURS (SÉMANTIQUE NETTOYÉE) ---
 function semanticParagraphAnalysis(sourceText) {
   if (!sourceText) return [];
 
   const rawBlocks = sourceText
     .split(/\n\s*\n|(?<=[.!?])\s+/)
     .map((b) => b.replace(/^[-•*0-9.]+\s*/, '').trim())
-    .filter((b) => b.length > 25);
+    .filter((b) => b.length > 30);
 
   const semanticPairs = [];
 
@@ -127,9 +137,11 @@ function semanticParagraphAnalysis(sourceText) {
     const mainSentence = sentences[0];
     const words = mainSentence.replace(/[,;:!?()]/g, '').split(/\s+/);
     const keyWords = words.filter(w => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()));
-    const concept = keyWords.length > 0 ? keyWords.slice(0, 3).join(' ') : mainSentence.slice(0, 25);
+    
+    // Titre/Concept très court pour le recto
+    const concept = keyWords.length > 0 ? keyWords.slice(0, 3).join(' ') : "Notion clé";
 
-    if (concept.length > 3 && block.length > 20) {
+    if (concept.length > 2 && block.length > 20) {
       semanticPairs.push({
         term: concept.charAt(0).toUpperCase() + concept.slice(1),
         def: block.charAt(0).toUpperCase() + block.slice(1),
@@ -181,9 +193,9 @@ function generateAllExercisesLocal(sourceText) {
     }
 
     const fallbacks = [
-      `Cette notion décrit un phénomène non mentionné dans cette partie du cours.`,
-      `Il s'agit d'une hypothèse écartée par l'analyse globale du document.`,
-      `Cette définition correspond à un prérequis d'un autre chapitre.`
+      `Une propriété non vérifiée dans le contexte du document.`,
+      `Une hypothèse contredite par l'analyse globale du cours.`,
+      `Une notion secondaire appartenant à un chapitre distinct.`
     ];
     while (wrongOptions.length < 3) {
       const fb = fallbacks[wrongOptions.length];
@@ -194,24 +206,23 @@ function generateAllExercisesLocal(sourceText) {
 
     generatedQuestions.push({
       id: index + 1,
-      question: `Que retenir concernant la notion de « ${pair.term} » d'après le document ?`,
+      question: `D'après le cours, quelle est l'affirmation exacte concernant « ${pair.term} » ?`,
       options: allOptions,
       correctAnswer: allOptions.indexOf(correctText),
       explanation: pair.source
     });
   });
 
-  // Sécurité par défaut si le texte est très court
   const defaultQ = [{
     id: 1,
-    question: "Quelle est la meilleure approche de révision active ?",
-    options: ["Tester ses connaissances régulièrement", "Relire passivement le cours", "Apprendre sans pratiquer", "Ignorer les corrections"],
+    question: "Quelle est la règle d'or d'une révision efficace ?",
+    options: ["Se tester régulièrement avec des exercices", "Relire passivement son cours", "Apprendre par cœur sans comprendre", "Ne pas corriger ses erreurs"],
     correctAnswer: 0,
-    explanation: "La révision active stimule la mémorisation durable."
+    explanation: "La révision active stimule la mémoire à long terme."
   }];
 
-  const defaultFc = [{ id: 1, front: "Rappel", back: "Veuillez fournir un texte plus détaillé." }];
-  const defaultFb = [{ id: 1, sentenceWithBlank: "L'apprentissage [___] est efficace.", missingWord: "actif", explanation: "Implique une participation." }];
+  const defaultFc = [{ id: 1, front: "Révision active", back: "Méthode consistant à se poser des questions plutôt que de simplement relire." }];
+  const defaultFb = [{ id: 1, sentenceWithBlank: "L'apprentissage [___] est le plus efficace.", missingWord: "actif", explanation: "Implique de chercher les réponses." }];
 
   return {
     questions: generatedQuestions.length > 0 ? generatedQuestions : defaultQ,
@@ -254,6 +265,9 @@ export default function App() {
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [isSessionFinished, setIsSessionFinished] = useState(false);
+
+  // État d'inversion propre de la Flashcard
+  const [isCardFlipped, setIsCardFlipped] = useState(false);
 
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [userBlankInput, setUserBlankInput] = useState('');
@@ -338,6 +352,7 @@ export default function App() {
     setScore(0);
     setCombo(0);
     setIsSessionFinished(false);
+    setIsCardFlipped(false);
     setSelectedAnswer(null);
     setUserBlankInput('');
     setStepResultState(null);
@@ -363,6 +378,7 @@ export default function App() {
   const advanceToNextStep = useCallback(() => {
     if (currentStepIdx + 1 < sessionSteps.length && lives > 0) {
       setCurrentStepIdx((prev) => prev + 1);
+      setIsCardFlipped(false); // Réinitialiser le retournement de la carte
       setSelectedAnswer(null);
       setUserBlankInput('');
       setStepResultState(null);
@@ -446,12 +462,12 @@ export default function App() {
     try {
       let generated;
       if (apiKey && apiKey.trim().length > 5) {
-        setOcrProgress("Génération intelligente avec l'IA...");
+        setOcrProgress("Formulation personnalisée par l'IA...");
         try {
           generated = await generateExercisesWithExternalAI(text, apiKey);
         } catch (apiErr) {
-          console.warn("Échec IA externe, bascule sur le moteur local :", apiErr);
-          setOcrProgress("Bascule sur le mode local sémantique...");
+          console.warn("IA indisponible, passage sur le moteur local :", apiErr);
+          setOcrProgress("Bascule automatique sur l'analyse locale...");
           generated = generateAllExercisesLocal(text);
         }
       } else {
@@ -604,7 +620,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.6</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.7</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -652,7 +668,7 @@ export default function App() {
                     <Save className="w-4 h-4" />
                   </button>
                 </div>
-                <p className="text-[11px] text-slate-500">🔒 Votre clé est stockée localement. En cas de souci avec l'API, le mode local s'active automatiquement.</p>
+                <p className="text-[11px] text-slate-500">🔒 Votre clé est stockée uniquement dans votre navigateur.</p>
               </div>
 
               <div className="space-y-2">
@@ -778,21 +794,39 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* FLASHCARD */}
+                {/* FLASHCARD INTERACTIVE (CORRIGÉE : SEPARATION CLAIRE RECTO/VERSO) */}
                 {currentStep.type === 'flashcard' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
                       <span className="text-xs font-bold bg-amber-50 text-amber-700 px-3 py-1 rounded-full flex items-center space-x-1">
-                        <HelpCircle className="w-3.5 h-3.5" /> <span>Découverte / Rappel</span>
+                        <HelpCircle className="w-3.5 h-3.5" /> <span>Flashcard Découverte</span>
                       </span>
-                      <button onClick={() => speakText(`${currentStep.data.front} : ${currentStep.data.back}`)} className="p-1.5 text-slate-500 hover:text-indigo-600">
+                      <button onClick={() => speakText(isCardFlipped ? currentStep.data.back : currentStep.data.front)} className="p-1.5 text-slate-500 hover:text-indigo-600">
                         <Volume2 className="w-4 h-4" />
                       </button>
                     </div>
 
-                    <div className="bg-gradient-to-br from-indigo-50/50 to-purple-50/50 border-2 border-indigo-100 rounded-2xl p-6 min-h-56 flex flex-col items-center justify-center text-center select-none">
-                      <h3 className="text-xl font-bold text-slate-900 mb-3">{currentStep.data.front}</h3>
-                      <p className="text-slate-700 text-sm max-w-lg leading-relaxed">{currentStep.data.back}</p>
+                    <div 
+                      onClick={() => setIsCardFlipped(!isCardFlipped)}
+                      className="bg-gradient-to-br from-indigo-50/60 to-purple-50/60 border-2 border-indigo-200 rounded-2xl p-8 min-h-64 flex flex-col items-center justify-center text-center select-none cursor-pointer hover:shadow-md transition relative"
+                    >
+                      <span className="absolute top-4 right-4 text-[10px] font-bold text-indigo-400 bg-white px-2 py-1 rounded-md shadow-xs flex items-center space-x-1">
+                        <RotateCw className="w-3 h-3" />
+                        <span>{isCardFlipped ? "VERSO (DÉFINITION)" : "RECTO (CONCEPT)"}</span>
+                      </span>
+
+                      {!isCardFlipped ? (
+                        <div className="space-y-2">
+                          <p className="text-xs uppercase tracking-wider font-semibold text-indigo-500">Concept / Terme :</p>
+                          <h3 className="text-2xl font-extrabold text-slate-900">{currentStep.data.front}</h3>
+                          <p className="text-xs text-slate-400 mt-4">(Cliquez sur la carte pour voir l'explication)</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-xs uppercase tracking-wider font-semibold text-purple-600">Définition / Explication :</p>
+                          <p className="text-base text-slate-800 leading-relaxed max-w-lg font-medium">{currentStep.data.back}</p>
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex justify-end">
