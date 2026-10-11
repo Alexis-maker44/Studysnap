@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, Home, Brain, 
-  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save, RotateCw, Wand2, Settings
+  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save, RotateCw, Wand2, Settings, Search
 } from 'lucide-react';
 
 const STOP_WORDS = new Set([
@@ -306,6 +306,10 @@ export default function App() {
   const [selectedSubject, setSelectedSubject] = useState('Histoire-Géo');
   const [newSubjectInput, setNewSubjectInput] = useState('');
   const [savedDecks, setSavedDecks] = useState([]);
+
+  // États pour la recherche et le filtre dans l'onglet Decks
+  const [deckSearchQuery, setDeckSearchQuery] = useState('');
+  const [deckFilterSubject, setDeckFilterSubject] = useState('Tous');
 
   const [questions, setQuestions] = useState([]);
   const [flashcards, setFlashcards] = useState([]);
@@ -710,6 +714,13 @@ export default function App() {
     }
   };
 
+  // Filtrage des decks enregistrés
+  const filteredDecks = savedDecks.filter((deck) => {
+    const matchesSearch = deck.title.toLowerCase().includes(deckSearchQuery.toLowerCase());
+    const matchesSubject = deckFilterSubject === 'Tous' || deck.subject === deckFilterSubject;
+    return matchesSearch && matchesSubject;
+  });
+
   const currentStep = sessionSteps[currentStepIdx];
 
   return (
@@ -717,7 +728,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.3</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.4</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -1100,18 +1111,42 @@ export default function App() {
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-bold text-slate-900">Mes Decks de Cours Enregistrés</h2>
               <span className="text-xs bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg font-semibold">
-                {savedDecks.length} deck(s)
+                {filteredDecks.length} / {savedDecks.length} deck(s)
               </span>
             </div>
 
-            {savedDecks.length === 0 ? (
+            {/* Barre de recherche et filtre par matière */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={deckSearchQuery}
+                  onChange={(e) => setDeckSearchQuery(e.target.value)}
+                  placeholder="Rechercher un deck par titre..."
+                  className="w-full p-2.5 pl-9 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+              </div>
+              <select
+                value={deckFilterSubject}
+                onChange={(e) => setDeckFilterSubject(e.target.value)}
+                className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="Tous">Toutes les matières</option>
+                {subjectList.map((subj, idx) => (
+                  <option key={idx} value={subj}>{subj}</option>
+                ))}
+              </select>
+            </div>
+
+            {filteredDecks.length === 0 ? (
               <div className="text-center py-12 text-slate-400 space-y-2">
                 <Folder className="w-12 h-12 mx-auto opacity-40" />
-                <p className="text-sm">Aucun deck enregistré pour le moment.</p>
+                <p className="text-sm">Aucun deck trouvé avec ces critères.</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {savedDecks.map((deck) => (
+                {filteredDecks.map((deck) => (
                   <div key={deck.id} className="p-4 rounded-xl border border-slate-200 hover:border-indigo-300 transition flex justify-between items-center bg-slate-50/50">
                     <div className="space-y-1">
                       <div className="flex items-center space-x-2">
