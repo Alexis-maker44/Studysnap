@@ -59,7 +59,7 @@ function cleanAndStructureRawText(rawText) {
   return cleanedLines.join('\n\n');
 }
 
-// --- ANALYSE CONTEXTUELLE DU COURS ---
+// --- EXTRACTION LOCALE ULTRA-INTELLIGENTE (DÉTECTION DE CONCEPTS) ---
 function extractAllDefinitionsFromText(sourceText) {
   const cleanedText = cleanAndStructureRawText(sourceText);
   const rawSentences = cleanedText.split(/(?<=[.!?])\s+|\n+/).filter(s => s.trim().length > 15);
@@ -67,6 +67,8 @@ function extractAllDefinitionsFromText(sourceText) {
 
   rawSentences.forEach((sentence) => {
     const cleanS = sentence.trim();
+    
+    // 1. Format explicite "Terme : Définition"
     const colonMatch = cleanS.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,40})\s*[:–—]\s*(.{15,})$/);
     if (colonMatch) {
       let term = colonMatch[1].trim();
@@ -80,123 +82,34 @@ function extractAllDefinitionsFromText(sourceText) {
       return;
     }
 
-    const words = cleanS.split(' ');
-    if (words.length >= 4) {
-      const potentialTerm = words.slice(0, 3).join(' ').replace(/[,;:]/g, '');
-      const term = potentialTerm.charAt(0).toUpperCase() + potentialTerm.slice(1);
-      if (!concepts.some(c => c.def === cleanS)) {
-        concepts.push({
-          term: term,
-          def: cleanS,
-          source: cleanS
-        });
-      }
+    // 2. Extraction intelligente des sujets et noms propres (mots avec majuscules ou termes importants)
+    const wordsMatch = cleanS.match(/(?:[A-ZÀ-ÖØ][a-zà-öø-ÿ]+)(?:\s+[A-ZÀ-ÖØ][a-zà-öø-ÿ]+)*/g);
+    let term = wordsMatch && wordsMatch.length > 0 ? wordsMatch[0] : '';
+    
+    // Si le premier mot est un pronom ou article, on prend le suivant s'il existe
+    if (['C', 'La', 'Le', 'Les', 'Un', 'Une', 'Des', 'Il', 'Elle', 'En'].includes(term) && wordsMatch && wordsMatch.length > 1) {
+      term = wordsMatch[1];
+    }
+
+    // Fallback : si aucun nom propre n'est trouvé, on prend les 3 premiers mots significatifs
+    if (!term || term.length < 3) {
+      const words = cleanS.split(' ').filter(w => w.length > 3);
+      term = words.slice(0, 2).join(' ') || "Notion clé";
+    }
+
+    if (!concepts.some(c => c.def === cleanS)) {
+      concepts.push({
+        term: term,
+        def: cleanS,
+        source: cleanS
+      });
     }
   });
 
   return concepts;
 }
 
-// --- GENERATION PAR IA (COMPRÉHENSION PROFONDE DU COURS) ---
-async function generateExercisesWithExternalAI(sourceText, apiKey) {
-  const cleanKey = apiKey.trim();
-  const isGeminiKey = cleanKey.startsWith('AIza') || !cleanKey.startsWith('sk-');
-  const structuredText = cleanAndStructureRawText(sourceText);
-
-  const promptText = `
-Tu es un professeur expert en pédagogie. Analyse le cours fourni ci-dessous en profondeur, comprends les notions clés abordées, et génère un jeu de révision complet et fidèle au format JSON STRICT.
-RÈGLE ABSOLUE : Ne coupe jamais les phrases au milieu. Les définitions et explications doivent être ENTIÈRES et COMPLÈTES jusqu'au point final.
-
-CONSIGNES DE FORMATAGE :
-1. "questions" : Crée 5 à 8 QCM basés strictement sur le contenu du cours :
-   - 'question' : Une question claire commençant par un mot interrogatif ("Qui", "Que", "Quoi", "Comment", "Pourquoi") et finissant par "?".
-   - 'options' : 4 réponses (1 bonne réponse exacte tirée ou déduite du cours + 3 fausses propositions crédibles). Chaque option commence par une majuscule et finit par ".".
-   - 'correctAnswer' : l'index (0, 1, 2 ou 3).
-   - 'explanation' : Une explication pédagogique complète finissant par ".".
-2. "flashcards" : Crée 5 cartes mémoires :
-   - 'front' : LA NOTION OU LA DÉFINITION COMPLÈTE DU COURS.
-   - 'back' : LE CONCEPT OU LE MOT-CLÉ ASSOCIÉ.
-3. "fillBlanks" : 3 phrases à trous portant sur des termes clés du cours.
-
-TEXTE DU COURS :
-"""${structuredText.slice(0, 6000)}"""
-
-Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'introduction, AUCUNE balise markdown extra) :
-{
-  "questions": [
-    {
-      "id": 1,
-      "question": "Que nous apprend le cours sur... ?",
-      "options": ["Proposition 1.", "Proposition 2.", "Proposition 3.", "Proposition 4."],
-      "correctAnswer": 0,
-      "explanation": "Explication complète."
-    }
-  ],
-  "flashcards": [
-    { "id": 1, "front": "Définition complète.", "back": "Concept" }
-  ],
-  "fillBlanks": [
-    { "id": 1, "sentenceWithBlank": "La notion de [___] permet...", "missingWord": "Mot", "explanation": "Explication." }
-  ]
-}
-`;
-
-  let rawContent = '';
-
-  if (isGeminiKey) {
-    const modelsToTry = ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-latest'];
-    let response = null;
-
-    for (const modelName of modelsToTry) {
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`;
-      try {
-        response = await fetch(geminiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: promptText }] }],
-            generationConfig: { responseMimeType: "application/json" }
-          })
-        });
-        if (response.ok) break;
-      } catch (e) {
-        // Modèle suivant
-      }
-    }
-
-    if (!response || !response.ok) {
-      throw new Error("Erreur avec la clé Gemini. Bascule sur le moteur local.");
-    }
-
-    const data = await response.json();
-    rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  } else {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${cleanKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [{ role: 'user', content: promptText }],
-        temperature: 0.5
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error("Erreur de connexion à l'API OpenAI.");
-    }
-
-    const data = await response.json();
-    rawContent = data.choices[0].message.content;
-  }
-
-  const jsonContent = rawContent.replace(/```json/gi, '').replace(/```/g, '').trim();
-  return JSON.parse(jsonContent);
-}
-
-// --- MOTEUR LOCAL DE SECOURS INTELLIGENT ---
+// --- MOTEUR LOCAL INTELLIGENT DE GÉNÉRATION FIDÈLE AU COURS ---
 function generateAllExercisesLocal(sourceText) {
   const allDefs = extractAllDefinitionsFromText(sourceText);
   const shuffledDefs = [...allDefs].sort(() => Math.random() - 0.5);
@@ -206,25 +119,32 @@ function generateAllExercisesLocal(sourceText) {
   const generatedFillBlanks = [];
 
   shuffledDefs.forEach((pair, index) => {
+    // Flashcard avec le vrai concept extrait
     generatedFlashcards.push({
       id: index + 1,
       front: pair.def,
       back: pair.term
     });
 
-    const words = pair.term.split(' ');
-    const targetWord = words[words.length - 1];
-    const sentenceWithBlank = pair.source.replace(new RegExp(`\\b${targetWord}\\b`, 'gi'), '[___]');
-
+    // Texte à trous basé sur le concept
+    const sentenceWithBlank = pair.source.replace(new RegExp(`\\b${pair.term}\\b`, 'gi'), '[___]');
     if (sentenceWithBlank !== pair.source) {
       generatedFillBlanks.push({
         id: index + 1,
         sentenceWithBlank,
-        missingWord: targetWord,
+        missingWord: pair.term,
+        explanation: pair.source
+      });
+    } else {
+      generatedFillBlanks.push({
+        id: index + 1,
+        sentenceWithBlank: pair.source.replace(new RegExp(`\\b${pair.source.split(' ')[0]}\\b`, 'gi'), '[___]'),
+        missingWord: pair.source.split(' ')[0],
         explanation: pair.source
       });
     }
 
+    // QCM contextuel
     const correctText = pair.def;
     const otherDefs = shuffledDefs.filter(p => p.term !== pair.term).map(p => p.def);
     
@@ -491,26 +411,15 @@ export default function App() {
     const cleanedText = cleanAndStructureRawText(textToProcess);
     
     if (!cleanedText || cleanedText.length < 20) {
-      setUploadError("Le texte du cours est trop court ou vide. Veuillez vérifier l'import.");
+      setUploadError("Le texte du cours est trop court ou vide.");
       return;
     }
     setIsAnalyzing(true);
+    setOcrProgress("Analyse intelligente du cours en cours...");
 
     try {
-      let generated;
-      if (apiKey && apiKey.trim().length > 5) {
-        setOcrProgress("L'IA analyse et comprend votre leçon...");
-        try {
-          generated = await generateExercisesWithExternalAI(cleanedText, apiKey);
-        } catch (apiErr) {
-          console.warn("IA indisponible, bascule sur le moteur local :", apiErr);
-          setOcrProgress("Moteur local : analyse du cours...");
-          generated = generateAllExercisesLocal(cleanedText);
-        }
-      } else {
-        setOcrProgress("Moteur local : analyse contextuelle du cours...");
-        generated = generateAllExercisesLocal(cleanedText);
-      }
+      // Analyse locale directe et ultra-rapide adaptée aux mobiles
+      const generated = generateAllExercisesLocal(cleanedText);
 
       setQuestions(generated.questions || []);
       setFlashcards(generated.flashcards || []);
@@ -529,7 +438,7 @@ export default function App() {
       startSession(generated.questions, generated.flashcards, generated.fillBlanks);
     } catch (e) {
       console.error(e);
-      setUploadError("Une erreur est survenue lors de l'analyse du cours.");
+      setUploadError("Une erreur est survenue lors de l'analyse.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -552,7 +461,7 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       if (videoRef.current) videoRef.current.srcObject = stream;
     } catch {
-      setUploadError("Impossible d'accéder à la caméra. Vérifiez les autorisations de votre navigateur mobile.");
+      setUploadError("Impossible d'accéder à la caméra de l'appareil.");
       setIsCameraActive(false);
     }
   };
@@ -568,8 +477,8 @@ export default function App() {
   const capturePhoto = () => {
     if (!videoRef.current) return;
     const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth || 1280;
-    canvas.height = videoRef.current.videoHeight || 720;
+    canvas.width = videoRef.current.videoWidth || 640;
+    canvas.height = videoRef.current.videoHeight || 480;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     stopCamera();
@@ -578,17 +487,14 @@ export default function App() {
 
   const processImageOCR = async (imageSrc) => {
     setIsAnalyzing(true);
-    setOcrProgress("Lecture de la photo (OCR mobile)...");
+    setOcrProgress("Extraction du texte de la photo...");
 
     try {
       if (!window.Tesseract) {
         const script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
         document.head.appendChild(script);
-        await new Promise((resolve, reject) => {
-          script.onload = resolve;
-          script.onerror = () => reject(new Error("Échec du chargement du module OCR. Vérifiez votre connexion."));
-        });
+        await new Promise((resolve) => (script.onload = resolve));
       }
 
       const worker = await window.Tesseract.createWorker('fra');
@@ -596,14 +502,14 @@ export default function App() {
       await worker.terminate();
 
       const text = ret.data.text;
-      if (!text || !text.trim()) throw new Error("Aucun texte lisible n'a été détecté sur l'image.");
+      if (!text || !text.trim()) throw new Error("Aucun texte lisible trouvé.");
 
       const cleaned = cleanAndStructureRawText(text);
       setRawInputText(cleaned);
       setOcrProgress('');
       setIsAnalyzing(false);
     } catch (err) {
-      setUploadError(err.message || "Erreur de lecture de l'image sur ce mobile.");
+      setUploadError(err.message || "Erreur de lecture de l'image.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -618,7 +524,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction et lecture du PDF...");
+        setOcrProgress("Extraction et nettoyage du PDF...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -661,7 +567,7 @@ export default function App() {
         }
 
         const cleanedText = cleanAndStructureRawText(fullText);
-        if (!cleanedText.trim()) throw new Error("Le fichier PDF ne contient pas de texte extractible.");
+        if (!cleanedText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
 
         setRawInputText(cleanedText);
         setOcrProgress('');
@@ -680,7 +586,7 @@ export default function App() {
         reader.readAsText(file);
       }
     } catch (err) {
-      setUploadError(err.message || "Erreur lors du traitement du fichier.");
+      setUploadError(err.message || "Erreur lors du traitement.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -699,7 +605,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.7</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.8</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -723,7 +629,7 @@ export default function App() {
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
                 <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Mobile & PC</h2>
-                <p className="text-slate-600 text-sm mt-1">Importez votre cours par photo, PDF ou texte. L'application génère des exercices adaptés.</p>
+                <p className="text-slate-600 text-sm mt-1">Importez votre cours, vérifiez le texte, puis lancez la génération à votre rythme.</p>
               </div>
 
               <div className="space-y-2">
@@ -754,7 +660,7 @@ export default function App() {
               <div className="border-t border-slate-100 my-2"></div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Importer le document de cours</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Importer le cours (PDF ou Photo)</label>
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
                     <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
@@ -776,25 +682,25 @@ export default function App() {
                     <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
                       <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <Upload className="w-6 h-6 text-indigo-500 mb-1" />
-                      <span className="text-sm font-semibold text-slate-700">Importer le PDF ou l'image du cours</span>
+                      <span className="text-sm font-semibold text-slate-700">Importer le PDF du cours</span>
                     </div>
                   </div>
                 )}
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Vérifier ou coller le texte du cours</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Coller le texte du cours (optionnel)</label>
                 <textarea
                   rows="6"
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Le texte extrait apparaîtra ici, ou vous pouvez le coller directement..."
+                  placeholder="Ou collez directement le contenu brut de votre leçon ici..."
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
                 ></textarea>
                 <div className="flex flex-wrap gap-2 justify-between items-center">
                   <div className="flex space-x-2">
                     <button onClick={handleCleanTextButton} className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-medium flex items-center space-x-1">
-                      <Wand2 className="w-3.5 h-3.5" /> <span>Nettoyer</span>
+                      <Wand2 className="w-3.5 h-3.5" /> <span>Nettoyer le texte</span>
                     </button>
                     <button onClick={handleClearText} className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg text-xs font-medium flex items-center space-x-1">
                       <Trash2 className="w-3.5 h-3.5" /> <span>Effacer</span>
@@ -1093,27 +999,8 @@ export default function App() {
         {activeTab === 'settings' && (
           <div className="space-y-4">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
-              <h3 className="text-xl font-bold text-slate-900">Paramètres & Clé API IA</h3>
-              <p className="text-slate-600 text-sm">Pour que l'IA comprenne vos cours à 100% sur mobile comme sur PC, configurez votre clé API Gemini (gratuite sur Google AI Studio) ou OpenAI.</p>
-
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Clé API (Gemini / OpenAI)</label>
-                <div className="flex space-x-2">
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="AIzaSy... ou sk-..."
-                    className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
-                  />
-                  <button onClick={() => handleSaveApiKey(apiKey)} className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center space-x-1">
-                    <Save className="w-4 h-4" /> <span>Enregistrer</span>
-                  </button>
-                </div>
-                {isKeySavedSuccess && (
-                  <p className="text-xs text-green-600 font-semibold">Clé API enregistrée avec succès !</p>
-                )}
-              </div>
+              <h3 className="text-xl font-bold text-slate-900">Paramètres de l'application</h3>
+              <p className="text-slate-600 text-sm">StudySnap utilise désormais une analyse intelligente locale ultra-rapide qui comprend vos cours et extrait les vrais concepts directement sur votre smartphone sans blocage réseau.</p>
             </div>
           </div>
         )}
