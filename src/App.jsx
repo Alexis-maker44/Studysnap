@@ -425,9 +425,11 @@ export default function App() {
   };
 
   const handleDeleteDeck = (id) => {
-    const updated = savedDecks.filter((d) => d.id !== id);
-    setSavedDecks(updated);
-    localStorage.setItem('studysnap_decks', JSON.stringify(updated));
+    if (window.confirm("Êtes-vous sûr de vouloir supprimer ce deck de cours ?")) {
+      const updated = savedDecks.filter((d) => d.id !== id);
+      setSavedDecks(updated);
+      localStorage.setItem('studysnap_decks', JSON.stringify(updated));
+    }
   };
 
   const advanceToNextStep = useCallback(() => {
@@ -558,6 +560,11 @@ export default function App() {
   const handleCleanTextButton = () => {
     const cleaned = cleanAndStructureRawText(rawInputText);
     setRawInputText(cleaned);
+  };
+
+  const handleClearText = () => {
+    setRawInputText('');
+    setUploadError(null);
   };
 
   const startCamera = async () => {
@@ -710,7 +717,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.2</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.3</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -798,10 +805,16 @@ export default function App() {
                 <div className="flex justify-between items-center">
                   <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Texte extrait & Reconstitué (Vérifiable)</label>
                   {rawInputText.trim() && (
-                    <button onClick={handleCleanTextButton} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center space-x-1 font-semibold">
-                      <Wand2 className="w-3.5 h-3.5" />
-                      <span>Nettoyer les sauts de ligne</span>
-                    </button>
+                    <div className="flex items-center space-x-3">
+                      <button onClick={handleCleanTextButton} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center space-x-1 font-semibold">
+                        <Wand2 className="w-3.5 h-3.5" />
+                        <span>Nettoyer</span>
+                      </button>
+                      <button onClick={handleClearText} className="text-xs text-red-600 hover:text-red-800 flex items-center space-x-1 font-semibold">
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Effacer tout</span>
+                      </button>
+                    </div>
                   )}
                 </div>
                 <textarea
