@@ -22,49 +22,69 @@ const speakText = (text) => {
   }
 };
 
-// --- ALGORITHME DE NETTOYAGE ET RECONSTITUTION DES PARAGRAPHES ---
+// --- NETTOYAGE ET RECONSTITUTION DES PHRASES MULTI-LIGNES ---
 function cleanAndStructureRawText(rawText) {
   if (!rawText) return '';
 
-  return rawText
-    // Supprimer les liens internet et citations parasites
+  let text = rawText
     .replace(/https?:\/\/\S+/gi, '')
     .replace(/www\.\S+/gi, '')
     .replace(/\b4H-Chap\.\d+:?\s*[^\n]*/gi, '')
-    .replace(/\b\d+\/5\b/g, '')
-    
-    // Recoller les mots coupés par un retour à la ligne au milieu d'une phrase
-    // Si la ligne se termine sans point, point d'interrogation ou deux-points, on colle à la suivante
-    .replace(/([^.:!?\n])\n+([a-zà-öø-ÿ0-9])/gi, '$1 $2')
-    
-    // Normaliser les espaces multiples et sauts de ligne
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n\s*\n+/g, '\n')
-    .trim();
+    .replace(/\b\d+\/5\b/g, '');
+
+  const lines = text.split('\n');
+  let cleanedLines = [];
+  let currentParagraph = '';
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
+    if (!line) {
+      if (currentParagraph) {
+        cleanedLines.push(currentParagraph);
+        currentParagraph = '';
+      }
+      continue;
+    }
+
+    if (!currentParagraph) {
+      currentParagraph = line;
+    } else {
+      // Si la ligne précédente ne se termine pas par un point ou deux-points, on recolle
+      const lastChar = currentParagraph.slice(-1);
+      if (['.', '!', '?', ':', ';'].includes(lastChar) || /^[•\-\*]/.test(line)) {
+        cleanedLines.push(currentParagraph);
+        currentParagraph = line;
+      } else {
+        currentParagraph += ' ' + line;
+      }
+    }
+  }
+  if (currentParagraph) {
+    cleanedLines.push(currentParagraph);
+  }
+
+  return cleanedLines.join('\n\n');
 }
 
-// --- EXTRACTION STRICTE ET COMPLÈTE DE TOUTES LES DÉFINITIONS ---
+// --- EXTRACTION EXHAUSTIVE DE TOUTES LES DÉFINITIONS ---
 function extractAllDefinitionsFromText(sourceText) {
   const cleanedText = cleanAndStructureRawText(sourceText);
-  const lines = cleanedText.split('\n');
+  const paragraphs = cleanedText.split(/\n+/);
   const definitions = [];
 
-  lines.forEach((line) => {
-    const trimmed = line.trim();
-    if (trimmed.length < 12) return;
+  paragraphs.forEach((para) => {
+    const trimmed = para.trim();
+    if (trimmed.length < 15) return;
 
-    // Détection des structures "Terme : Définition complète"
-    const match = trimmed.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,45})\s*[:–—]\s*(.{10,})$/);
+    const match = trimmed.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,50})\s*[:–—]\s*(.{15,})$/);
     if (match) {
       let term = match[1].trim();
       let def = match[2].trim();
 
-      // S'assurer que la définition se termine par un point
-      if (!def.endsWith('.') && !def.endsWith('!') && !def.endsWith('?')) {
+      if (!/[.!?]$/.test(def)) {
         def += '.';
       }
 
-      // Nettoyage Majuscules
       term = term.charAt(0).toUpperCase() + term.slice(1);
       def = def.charAt(0).toUpperCase() + def.slice(1);
 
@@ -77,31 +97,26 @@ function extractAllDefinitionsFromText(sourceText) {
   return definitions;
 }
 
-// --- GENERATION DES EXERCICES PAR L'IA GEMINI OU OPENAI ---
+// --- GENERATION PAR IA ---
 async function generateExercisesWithExternalAI(sourceText, apiKey) {
   const cleanKey = apiKey.trim();
   const isGeminiKey = cleanKey.startsWith('AIza') || !cleanKey.startsWith('sk-');
   const structuredText = cleanAndStructureRawText(sourceText);
 
   const promptText = `
-Tu es un professeur d'histoire-géo et expert pédagogique pour enfants. 
-Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
-
-CONSIGNES DE SÉLECTION DE TEXTE ET VARIÉTÉ :
-- Analyse TOUT le texte fourni du début à la fin.
-- Choisis AU HASARD différentes notions parmi toutes celles présentes (varie à chaque génération !).
-- Ne coupe JAMAIS les phrases au milieu. Les définitions doivent être ENTIÈRES et COMPLÈTES (se terminer par un point ".").
+Tu es un professeur d'histoire-géo et expert pédagogique. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
+RÈGLE ABSOLUE : Ne coupe jamais les phrases au milieu. Les définitions doivent être ENTIÈRES et COMPLÈTES jusqu'au point final.
 
 CONSIGNES DE FORMATAGE :
-1. "questions" : Crée 5 QCM de réflexion sur le cours :
-   - 'question' : Commence OBLIGATOIREMENT par un mot interrogatif ("Qui", "Que", "Quoi", "Comment", "Pourquoi") et finit par "?". (ex: "Que sont les Lumières ?", "Qu'est-ce qu'une monarchie absolue ?").
-   - 'options' : 4 réponses complètes (1 vraie définition intégrale + 3 fausses propositions réalistes). Chaque option commence par une majuscule et finit par un point ".".
-   - 'correctAnswer' : l'index (0, 1, 2 ou 3) de la bonne réponse.
-   - 'explanation' : Une explication complète se terminant par un point ".".
+1. "questions" : Crée 5 QCM de niveau collège :
+   - 'question' : Commence par un mot interrogatif ("Qui", "Que", "Quoi", "Comment", "Pourquoi") et finit par "?".
+   - 'options' : 4 réponses complètes (1 bonne définition intégrale + 3 fausses). Chaque option commence par une majuscule et finit par ".".
+   - 'correctAnswer' : l'index (0, 1, 2 ou 3).
+   - 'explanation' : Une explication complète finissant par ".".
 2. "flashcards" : Crée 5 cartes mémoires :
-   - 'front' : LA DÉFINITION COMPLÈTE ET ENTIÈRE (une phrase propre finissant par un point ".").
-   - 'back' : LE MOT-CLÉ / NOM DU CONCEPT À DEVINER (ex: "Les Lumières", "La Censure", "Un philosophe").
-3. "fillBlanks" : 3 à 5 phrases à trous portant sur des mots techniques.
+   - 'front' : LA DÉFINITION COMPLÈTE ET ENTIÈRE (finissant par un point ".").
+   - 'back' : LE MOT-CLÉ / CONCEPT À DEVINER.
+3. "fillBlanks" : 3 à 5 phrases à trous portant sur des termes clés.
 
 TEXTE DU COURS :
 """${structuredText.slice(0, 6000)}"""
@@ -112,7 +127,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
     {
       "id": 1,
       "question": "Que sont... ?",
-      "options": ["Première proposition.", "Deuxième proposition.", "Troisième proposition.", "Quatrième proposition."],
+      "options": ["Proposition 1.", "Proposition 2.", "Proposition 3.", "Proposition 4."],
       "correctAnswer": 0,
       "explanation": "Explication complète."
     }
@@ -121,7 +136,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
     { "id": 1, "front": "Ensemble d'idées nouvelles, formulées par des philosophes et des savants, qui circulent en Europe au XVIIIe siècle.", "back": "Les Lumières" }
   ],
   "fillBlanks": [
-    { "id": 1, "sentenceWithBlank": "La [___] permet de contrôler la publication des livres.", "missingWord": "Censure", "explanation": "Définition de la censure." }
+    { "id": 1, "sentenceWithBlank": "La [___] permet de contrôler la publication.", "missingWord": "Censure", "explanation": "Définition de la censure." }
   ]
 }
 `;
@@ -165,7 +180,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [{ role: 'user', content: promptText }],
-        temperature: 0.5 // Température augmentée pour maximiser la variété des questions
+        temperature: 0.5
       })
     });
 
@@ -181,11 +196,9 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL DE SECOURS (AVEC TIRAGE ALÉATOIRE COMPLET SUR L'ENSEMBLE DU TEXTE) ---
+// --- MOTEUR LOCAL AVEC TIRAGE ALÉATOIRE ---
 function generateAllExercisesLocal(sourceText) {
   const allDefs = extractAllDefinitionsFromText(sourceText);
-
-  // Mélange aléatoire (Fisher-Yates Shuffle) de toutes les définitions trouvées
   const shuffledDefs = [...allDefs].sort(() => Math.random() - 0.5);
 
   const generatedQuestions = [];
@@ -193,14 +206,12 @@ function generateAllExercisesLocal(sourceText) {
   const generatedFillBlanks = [];
 
   shuffledDefs.forEach((pair, index) => {
-    // FLASHCARD : RECTO = DÉFINITION COMPLÈTE | VERSO = MOT-CLÉ
     generatedFlashcards.push({
       id: index + 1,
       front: pair.def,
       back: pair.term
     });
 
-    // TEXTE À TROUS
     const words = pair.term.split(' ');
     const targetWord = words[words.length - 1];
     const sentenceWithBlank = pair.source.replace(new RegExp(`\\b${targetWord}\\b`, 'gi'), '[___]');
@@ -214,7 +225,6 @@ function generateAllExercisesLocal(sourceText) {
       });
     }
 
-    // QCM
     const correctText = pair.def;
     const otherDefs = shuffledDefs.filter(p => p.term !== pair.term).map(p => p.def);
     
@@ -276,8 +286,6 @@ function generateAllExercisesLocal(sourceText) {
 
 function buildSessionSteps(questions, flashcards, fillBlanks) {
   const steps = [];
-  
-  // On mélange les flashcards et les QCM pour renouveler l'expérience
   const shuffledFc = [...(flashcards || [])].sort(() => Math.random() - 0.5).slice(0, 5);
   const shuffledQ = [...(questions || [])].sort(() => Math.random() - 0.5).slice(0, 5);
   const shuffledFb = [...(fillBlanks || [])].sort(() => Math.random() - 0.5).slice(0, 3);
@@ -499,6 +507,7 @@ export default function App() {
     }
   };
 
+  // LANCEMENT MANUEL DE LA GÉNÉRATION AU CLIC SUR LE BOUTON
   const handleProcessText = async (textToProcess) => {
     setUploadError(null);
     const cleanedText = cleanAndStructureRawText(textToProcess);
@@ -606,7 +615,7 @@ export default function App() {
       const cleaned = cleanAndStructureRawText(text);
       setRawInputText(cleaned);
       setOcrProgress('');
-      await handleProcessText(cleaned);
+      setIsAnalyzing(false);
     } catch (err) {
       setUploadError(err.message || "Erreur de lecture de l'image.");
       setIsAnalyzing(false);
@@ -675,17 +684,17 @@ export default function App() {
 
         setRawInputText(cleanedText);
         setOcrProgress('');
-        await handleProcessText(cleanedText);
+        setIsAnalyzing(false);
       } else if (file.type.startsWith('image/')) {
         const reader = new FileReader();
         reader.onload = (e) => processImageOCR(e.target.result);
         reader.readAsDataURL(file);
       } else {
         const reader = new FileReader();
-        reader.onload = async (e) => {
+        reader.onload = (e) => {
           const cleaned = cleanAndStructureRawText(e.target?.result);
           setRawInputText(cleaned);
-          await handleProcessText(cleaned);
+          setIsAnalyzing(false);
         };
         reader.readAsText(file);
       }
@@ -703,7 +712,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.0 (Phrases Entières)</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.1</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -724,8 +733,8 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Intelligent</h2>
-                <p className="text-slate-600 text-sm mt-1">L'application reconstitue automatiquement les phrases entières et varie les questions à chaque partie.</p>
+                <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Manuel</h2>
+                <p className="text-slate-600 text-sm mt-1">Importez votre cours, vérifiez le texte, puis lancez la génération à votre rythme.</p>
               </div>
 
               {/* CLÉ API */}
@@ -781,7 +790,7 @@ export default function App() {
               <div className="border-t border-slate-100 my-2"></div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner le cours (PDF ou Photo)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Importer le cours (PDF ou Photo)</label>
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
                     <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
@@ -811,18 +820,18 @@ export default function App() {
 
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
-                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Texte extrait & Reconstitué</label>
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Texte extrait & Reconstitué (Vérifiable)</label>
                   {rawInputText.trim() && (
                     <button onClick={handleCleanTextButton} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center space-x-1 font-semibold">
                       <Wand2 className="w-3.5 h-3.5" />
-                      <span>Nettoyer et Structurer</span>
+                      <span>Nettoyer les sauts de ligne</span>
                     </button>
                   )}
                 </div>
                 <textarea
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Le texte propre et reconstitué s'affichera ici..."
+                  placeholder="Le texte s'affichera ici après l'import. Vous pouvez le relire avant de générer le jeu..."
                   rows={5}
                   className="w-full p-3 text-xs font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
@@ -832,7 +841,7 @@ export default function App() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
                 >
                   <Sparkles className="w-5 h-5 text-amber-300" />
-                  <span>{isAnalyzing ? (ocrProgress || "Génération des exercices...") : "Générer les exercices & Lancer le Jeu"}</span>
+                  <span>{isAnalyzing ? (ocrProgress || "Génération en cours...") : "Générer les exercices & Lancer le Jeu"}</span>
                 </button>
               </div>
 
@@ -891,7 +900,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Flashcard (Recto = Définition, Verso = Mot clé) */}
+                {/* Flashcard */}
                 {currentStep.type === 'flashcard' && (
                   <div className="space-y-6 text-center">
                     <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
