@@ -22,7 +22,7 @@ const speakText = (text) => {
   }
 };
 
-// --- NETTOYAGE ET RECONSTITUTION DES PHRASES MULTI-LIGNES (COMPATIBLE MOBILE) ---
+// --- NETTOYAGE ET RECONSTITUTION DES PHRASES (COMPATIBLE MOBILE) ---
 function cleanAndStructureRawText(rawText) {
   if (!rawText) return '';
 
@@ -67,52 +67,42 @@ function cleanAndStructureRawText(rawText) {
   return cleanedLines.join('\n\n');
 }
 
-// --- EXTRACTION ROBUSTE DES DÉFINITIONS (AVEC SECOURS MOBILE) ---
+// --- EXTRACTION INTELLIGENTE DU COURS (POUR TOUT TYPE DE TEXTE) ---
 function extractAllDefinitionsFromText(sourceText) {
   const cleanedText = cleanAndStructureRawText(sourceText);
-  const paragraphs = cleanedText.split(/\n+/);
-  const definitions = [];
+  const rawSentences = cleanedText.split(/(?<=[.!?])\s+|\n+/).filter(s => s.trim().length > 20);
+  const concepts = [];
 
-  paragraphs.forEach((para) => {
-    const trimmed = para.trim();
-    if (trimmed.length < 15) return;
-
-    const match = trimmed.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,50})\s*[:–—]\s*(.{15,})$/);
-    if (match) {
-      let term = match[1].trim();
-      let def = match[2].trim();
-
-      if (!/[.!?]$/.test(def)) {
-        def += '.';
-      }
-
+  rawSentences.forEach((sentence) => {
+    const cleanS = sentence.trim();
+    const colonMatch = cleanS.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,40})\s*[:–—]\s*(.{15,})$/);
+    if (colonMatch) {
+      let term = colonMatch[1].trim();
+      let def = colonMatch[2].trim();
+      if (!/[.!?]$/.test(def)) def += '.';
       term = term.charAt(0).toUpperCase() + term.slice(1);
       def = def.charAt(0).toUpperCase() + def.slice(1);
-
-      if (!definitions.some(d => d.term.toLowerCase() === term.toLowerCase())) {
-        definitions.push({ term, def, source: `${term} : ${def}` });
+      if (!concepts.some(c => c.term.toLowerCase() === term.toLowerCase())) {
+        concepts.push({ term, def, source: cleanS });
       }
+      return;
     }
-  });
 
-  // Sécurité mobile : si aucun format avec deux-points n'est trouvé, découpage intelligent par phrases
-  if (definitions.length === 0) {
-    const sentences = cleanedText.match(/[^.!?]+[.!?]+/g) || [];
-    sentences.forEach((sentence, idx) => {
-      const cleanS = sentence.trim();
-      if (cleanS.length > 20) {
-        const words = cleanS.split(' ');
-        const term = words.slice(0, 3).join(' ') + '...';
-        definitions.push({
-          term: `Concept ${idx + 1}`,
+    const words = cleanS.split(' ');
+    if (words.length >= 5) {
+      const potentialTerm = words.slice(0, 3).join(' ').replace(/[,;:]/g, '');
+      const term = potentialTerm.charAt(0).toUpperCase() + potentialTerm.slice(1);
+      if (!concepts.some(c => c.def === cleanS)) {
+        concepts.push({
+          term: term,
           def: cleanS,
           source: cleanS
         });
       }
-    });
-  }
+    }
+  });
 
-  return definitions;
+  return concepts;
 }
 
 // --- GENERATION PAR IA ---
@@ -122,11 +112,11 @@ async function generateExercisesWithExternalAI(sourceText, apiKey) {
   const structuredText = cleanAndStructureRawText(sourceText);
 
   const promptText = `
-Tu es un professeur d'histoire-géo et expert pédagogique. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
+Tu es un professeur et expert pédagogique. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
 RÈGLE ABSOLUE : Ne coupe jamais les phrases au milieu. Les définitions doivent être ENTIÈRES et COMPLÈTES jusqu'au point final.
 
 CONSIGNES DE FORMATAGE :
-1. "questions" : Crée 5 QCM de niveau collège :
+1. "questions" : Crée 5 QCM de niveau collège/lycée :
    - 'question' : Commence par un mot interrogatif ("Qui", "Que", "Quoi", "Comment", "Pourquoi") et finit par "?".
    - 'options' : 4 réponses complètes (1 bonne définition intégrale + 3 fausses). Chaque option commence par une majuscule et finit par ".".
    - 'correctAnswer' : l'index (0, 1, 2 ou 3).
@@ -151,10 +141,10 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
     }
   ],
   "flashcards": [
-    { "id": 1, "front": "Ensemble d'idées nouvelles, formulées par des philosophes et des savants, qui circulent en Europe au XVIIIe siècle.", "back": "Les Lumières" }
+    { "id": 1, "front": "Définition complète.", "back": "Concept" }
   ],
   "fillBlanks": [
-    { "id": 1, "sentenceWithBlank": "La [___] permet de contrôler la publication.", "missingWord": "Censure", "explanation": "Définition de la censure." }
+    { "id": 1, "sentenceWithBlank": "La [___] permet...", "missingWord": "Mot", "explanation": "Explication." }
   ]
 }
 `;
@@ -214,7 +204,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL AVEC TIRAGE ALÉATOIRE ---
+// --- MOTEUR LOCAL RICHE ET FIDÈLE AU COURS ---
 function generateAllExercisesLocal(sourceText) {
   const allDefs = extractAllDefinitionsFromText(sourceText);
   const shuffledDefs = [...allDefs].sort(() => Math.random() - 0.5);
@@ -256,9 +246,9 @@ function generateAllExercisesLocal(sourceText) {
     }
 
     const fallbacks = [
-      `Une notion non vérifiée dans le contexte de la leçon.`,
-      `Une hypothèse contredite par l'analyse du document.`,
-      `Un principe appartenant à une autre période historique.`
+      `Une information non mentionnée dans ce chapitre du cours.`,
+      `Un élément contradictoire avec l'analyse du document.`,
+      `Une notion hors du contexte de la leçon étudiée.`
     ];
     while (wrongOptions.length < 3) {
       const fb = fallbacks[wrongOptions.length];
@@ -267,17 +257,9 @@ function generateAllExercisesLocal(sourceText) {
 
     const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
 
-    let qText = `Que désigne « ${pair.term} » ?`;
-    const lowerTerm = pair.term.toLowerCase();
-    if (lowerTerm.startsWith('les ') || lowerTerm.startsWith('des ')) {
-      qText = `Que sont ${lowerTerm} ?`;
-    } else if (lowerTerm.startsWith('le ') || lowerTerm.startsWith('la ') || lowerTerm.startsWith('un ') || lowerTerm.startsWith('une ')) {
-      qText = `Qu'est-ce que ${lowerTerm} ?`;
-    }
-
     generatedQuestions.push({
       id: index + 1,
-      question: qText,
+      question: `Que nous apprend le cours concernant : « ${pair.term} » ?`,
       options: allOptions,
       correctAnswer: allOptions.indexOf(correctText),
       explanation: pair.source
@@ -286,14 +268,14 @@ function generateAllExercisesLocal(sourceText) {
 
   const defaultQ = [{
     id: 1,
-    question: "Quelle est la règle d'or d'une révision efficace ?",
-    options: ["Se tester régulièrement avec des exercices.", "Relire passivement son cours.", "Apprendre par cœur sans comprendre.", "Ne pas corriger ses erreurs."],
+    question: "Quel est le sujet principal abordé dans le texte importé ?",
+    options: ["Le contenu détaillé de la leçon analysée.", "Une thématique sans rapport.", "Une formule mathématique isolée.", "Un élément historique externe."],
     correctAnswer: 0,
-    explanation: "La révision active stimule la mémoire à long terme."
+    explanation: "Le cours fourni sert de base unique aux questions."
   }];
 
-  const defaultFc = [{ id: 1, front: "Ensemble d'idées nouvelles, formulées par des philosophes et des savants, qui circulent en Europe au XVIIIe siècle.", back: "Les Lumières" }];
-  const defaultFb = [{ id: 1, sentenceWithBlank: "L'apprentissage [___] est le plus efficace.", missingWord: "actif", explanation: "Implique de chercher les réponses." }];
+  const defaultFc = [{ id: 1, front: "Notion principale extraite du cours importé.", back: "Concept clé" }];
+  const defaultFb = [{ id: 1, sentenceWithBlank: "Le cours traite de [___] principaux.", missingWord: "points", explanation: "Basé sur l'analyse globale du texte." }];
 
   return {
     questions: generatedQuestions.length > 0 ? generatedQuestions : defaultQ,
@@ -320,12 +302,10 @@ function buildSessionSteps(questions, flashcards, fillBlanks) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
-  
   const [subjectList, setSubjectList] = useState(['Histoire-Géo', 'Français', 'Mathématiques', 'Sciences']);
   const [selectedSubject, setSelectedSubject] = useState('Histoire-Géo');
   const [newSubjectInput, setNewSubjectInput] = useState('');
   const [savedDecks, setSavedDecks] = useState([]);
-
   const [deckSearchQuery, setDeckSearchQuery] = useState('');
   const [deckFilterSubject, setDeckFilterSubject] = useState('Tous');
 
@@ -343,9 +323,7 @@ export default function App() {
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [isSessionFinished, setIsSessionFinished] = useState(false);
-
   const [isCardFlipped, setIsCardFlipped] = useState(false);
-
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [userBlankInput, setUserBlankInput] = useState('');
   const [stepResultState, setStepResultState] = useState(null);
@@ -364,13 +342,10 @@ export default function App() {
     try {
       const savedHistory = localStorage.getItem('studysnap_history');
       if (savedHistory) setHistory(JSON.parse(savedHistory));
-
       const savedSubjects = localStorage.getItem('studysnap_subjects');
       if (savedSubjects) setSubjectList(JSON.parse(savedSubjects));
-
       const decks = localStorage.getItem('studysnap_decks');
       if (decks) setSavedDecks(JSON.parse(decks));
-
       const savedKey = localStorage.getItem('studysnap_apikey');
       if (savedKey) setApiKey(savedKey);
     } catch (e) {
@@ -548,11 +523,11 @@ export default function App() {
           generated = await generateExercisesWithExternalAI(cleanedText, apiKey);
         } catch (apiErr) {
           console.warn("IA indisponible, passage sur le moteur local :", apiErr);
-          setOcrProgress("Moteur local : extraction des définitions...");
+          setOcrProgress("Moteur local : analyse du cours...");
           generated = generateAllExercisesLocal(cleanedText);
         }
       } else {
-        setOcrProgress("Moteur local : extraction complète des définitions...");
+        setOcrProgress("Moteur local : analyse contextuelle du cours...");
         generated = generateAllExercisesLocal(cleanedText);
       }
 
@@ -678,13 +653,10 @@ export default function App() {
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const tokenized = await page.getTextContent();
-          
           const items = tokenized.items.sort((a, b) => {
             const yA = a.transform[5];
             const yB = b.transform[5];
-            if (Math.abs(yA - yB) > 5) {
-              return yB - yA;
-            }
+            if (Math.abs(yA - yB) > 5) return yB - yA;
             return a.transform[4] - b.transform[4];
           });
 
@@ -693,7 +665,6 @@ export default function App() {
           items.forEach((item) => {
             const y = item.transform[5];
             if (item.str.toLowerCase().includes('http') || item.str.toLowerCase().includes('www')) return;
-
             if (lastY !== null && Math.abs(y - lastY) > 6) {
               pageText += '\n';
             } else if (pageText.length > 0 && !pageText.endsWith(' ')) {
@@ -706,7 +677,6 @@ export default function App() {
         }
 
         const cleanedText = cleanAndStructureRawText(fullText);
-
         if (!cleanedText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
 
         setRawInputText(cleanedText);
@@ -745,7 +715,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.5</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.6</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
