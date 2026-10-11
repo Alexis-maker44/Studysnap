@@ -22,13 +22,13 @@ const speakText = (text) => {
   }
 };
 
-// --- APPEL OPTIMISÉ POUR IA GEMINI / OPENAI (AVEC DÉTECTION DE DÉFINITIONS) ---
+// --- APPEL OPTIMISÉ POUR IA GEMINI / OPENAI ---
 async function generateExercisesWithExternalAI(sourceText, apiKey) {
   const cleanKey = apiKey.trim();
   const isGeminiKey = cleanKey.startsWith('AIza') || !cleanKey.startsWith('sk-');
 
   const promptText = `
-Tu es un professeur d'histoire-géo et expert pédagogique bienveillant. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
+Tu es un professeur expert. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
 
 CONSIGNES STRICTES :
 1. "questions" : Crée 5 QCM de niveau collège/lycée. Pour chaque question :
@@ -37,7 +37,7 @@ CONSIGNES STRICTES :
    - 'correctAnswer' : l'index (0, 1, 2 ou 3) de la bonne réponse.
    - 'explanation' : une explication claire rappelant le contexte du cours.
 2. "flashcards" : Crée 5 cartes mémoires basées sur les concepts clés et définitions. 
-   - 'front' : SEULEMENT le nom du concept, terme ou mot-clé (2 à 5 mots maximum, ex: "Les Lumières", "Monarchie absolue"). NE METS PAS la réponse sur le recto !
+   - 'front' : SEULEMENT le nom du concept, terme ou mot-clé (2 à 5 mots maximum). NE METS PAS la réponse sur le recto !
    - 'back' : La définition complète ou explication détaillée de ce concept tirée du cours.
 3. "fillBlanks" : 3 à 5 phrases à trous portant sur des termes techniques essentiels du cours.
 
@@ -83,7 +83,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
         });
         if (response.ok) break;
       } catch (e) {
-        // Essai du modèle suivant
+        // Modèle suivant
       }
     }
 
@@ -119,14 +119,14 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL DE SECOURS AMÉLIORÉ (DÉTECTION DE DÉFINITIONS "TERME : DÉFINITION") ---
+// --- MOTEUR LOCAL DE SECOURS (DÉTECTION STRUCTURÉE DES DÉFINITIONS) ---
 function semanticParagraphAnalysis(sourceText) {
   if (!sourceText) return [];
 
   const lines = sourceText.split('\n');
   const semanticPairs = [];
 
-  // 1. Recherche prioritaire des définitions explicites (ex: "Les Lumières : ensemble d'idées...")
+  // 1. Extraction prioritaire des définitions propres (ex: "Les Lumières : ensemble d'idées...")
   lines.forEach((line) => {
     const trimmed = line.trim();
     const match = trimmed.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,40})\s*[:–—]\s*(.{15,})$/);
@@ -143,7 +143,7 @@ function semanticParagraphAnalysis(sourceText) {
     }
   });
 
-  // 2. Complément avec l'analyse de blocs si nécessaire
+  // 2. Complément par blocs de phrases si besoin
   if (semanticPairs.length < 3) {
     const rawBlocks = sourceText
       .split(/\n\s*\n|(?<=[.!?])\s+/)
@@ -212,9 +212,9 @@ function generateAllExercisesLocal(sourceText) {
     }
 
     const fallbacks = [
-      `Une propriété non vérifiée dans le contexte du document.`,
+      `Une notion non vérifiée dans le contexte du document.`,
       `Une hypothèse contredite par l'analyse globale du cours.`,
-      `Une notion secondaire appartenant à un chapitre distinct.`
+      `Un élément secondaire appartenant à un autre chapitre.`
     ];
     while (wrongOptions.length < 3) {
       const fb = fallbacks[wrongOptions.length];
@@ -480,16 +480,16 @@ export default function App() {
     try {
       let generated;
       if (apiKey && apiKey.trim().length > 5) {
-        setOcrProgress("Analyse pédagogique par l'IA...");
+        setOcrProgress("Analyse intelligente par l'IA...");
         try {
           generated = await generateExercisesWithExternalAI(text, apiKey);
         } catch (apiErr) {
           console.warn("IA indisponible, passage sur le moteur local :", apiErr);
-          setOcrProgress("Bascule sur l'analyseur local des définitions...");
+          setOcrProgress("Analyseur local des définitions...");
           generated = generateAllExercisesLocal(text);
         }
       } else {
-        setOcrProgress("Extraction des définitions du cours...");
+        setOcrProgress("Extraction structurée des notions...");
         generated = generateAllExercisesLocal(text);
       }
 
@@ -585,7 +585,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction du texte du PDF...");
+        setOcrProgress("Analyse géospatiale du PDF...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -604,7 +604,30 @@ export default function App() {
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const tokenized = await page.getTextContent();
-          fullText += tokenized.items.map((item) => item.str).join(' ') + '\n';
+          
+          // Tri intelligent par position Y (verticale) puis X (horizontale) pour éviter le mélange des colonnes
+          const items = tokenized.items.sort((a, b) => {
+            const yA = a.transform[5];
+            const yB = b.transform[5];
+            if (Math.abs(yA - yB) > 5) {
+              return yB - yA; // Du haut vers le bas
+            }
+            return a.transform[4] - b.transform[4]; // De gauche à droite
+          });
+
+          let lastY = null;
+          let pageText = '';
+          items.forEach((item) => {
+            const y = item.transform[5];
+            if (lastY !== null && Math.abs(y - lastY) > 6) {
+              pageText += '\n';
+            } else if (pageText.length > 0 && !pageText.endsWith(' ')) {
+              pageText += ' ';
+            }
+            pageText += item.str;
+            lastY = y;
+          });
+          fullText += pageText + '\n\n';
         }
 
         if (!fullText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
@@ -638,7 +661,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.8 (Spécial Révisions)</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.9 (Extraction Intelligente)</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -659,8 +682,8 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Aide aux Révisions Ludiques</h2>
-                <p className="text-slate-600 text-sm mt-1">Importez un cours (PDF, photo ou texte) : StudySnap extrait automatiquement les définitions clés !</p>
+                <h2 className="text-2xl font-bold text-slate-900">Révisions Ludiques & Structurées</h2>
+                <p className="text-slate-600 text-sm mt-1">Importez le PDF du cours : l'application remet en ordre le texte et isole les définitions.</p>
               </div>
 
               {/* CLÉ API */}
@@ -679,7 +702,7 @@ export default function App() {
                     type="password"
                     value={apiKey}
                     onChange={(e) => handleSaveApiKey(e.target.value)}
-                    placeholder="Collez votre clé Gemini (AIzaSy...) ou laissez vide (moteur local auto)"
+                    placeholder="Collez votre clé Gemini (AIzaSy...) ou laissez vide (analyseur local actif)"
                     className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400 font-mono"
                   />
                   <button onClick={() => handleSaveApiKey(apiKey)} className="p-1 text-indigo-600 hover:text-indigo-800" title="Enregistrer">
@@ -716,7 +739,7 @@ export default function App() {
               <div className="border-t border-slate-100 my-2"></div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner le cours (PDF / Photo / Image)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner le cours (PDF structuré ou Photo)</label>
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
                     <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
@@ -733,25 +756,25 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <button onClick={startCamera} className="p-4 border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/50 rounded-xl flex flex-col items-center justify-center transition">
                       <Camera className="w-6 h-6 text-indigo-600 mb-1" />
-                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo de la leçon</span>
+                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo du cours</span>
                     </button>
                     <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
                       <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <Upload className="w-6 h-6 text-indigo-500 mb-1" />
-                      <span className="text-sm font-semibold text-slate-700">Importer PDF du cours</span>
+                      <span className="text-sm font-semibold text-slate-700">Importer le PDF du cours</span>
                     </div>
                   </div>
                 )}
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Ou copier-coller le cours</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Aperçu du texte extrait (modifiable)</label>
                 <textarea
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Collez le texte du cours ici (ex: Les Lumières : ensemble d'idées...)..."
-                  rows={3}
-                  className="w-full p-3 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  placeholder="Le texte extrait du PDF s'affichera proprement ici..."
+                  rows={4}
+                  className="w-full p-3 text-xs font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
                 <button
                   onClick={() => handleProcessText(rawInputText)}
@@ -800,8 +823,8 @@ export default function App() {
                       </div>
                       <div className="text-sm font-semibold text-slate-700">
                         Score: <span className="text-indigo-600">{score}</span>
-                    </div>
-                    {currentStep.type !== 'flashcard' && (
+                      </div>
+                      {currentStep.type !== 'flashcard' && (
                         <div className={`flex items-center space-x-1 text-xs font-bold ${timeLeft <= 5 ? 'text-red-600 animate-pulse' : 'text-slate-600'}`}>
                           <Timer className="w-4 h-4" />
                           <span>{timeLeft}s</span>
@@ -810,7 +833,6 @@ export default function App() {
                     </div>
                   </div>
                   
-                  {/* Barre de progression */}
                   <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                     <div
                       className="bg-indigo-600 h-full transition-all duration-300"
@@ -823,7 +845,7 @@ export default function App() {
                 {currentStep.type === 'flashcard' && (
                   <div className="space-y-6 text-center">
                     <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                      <span>Carte Mémoire (Révision)</span>
+                      <span>Carte Mémoire</span>
                       <span>Recto / Verso</span>
                     </div>
 
@@ -834,7 +856,7 @@ export default function App() {
                       }`}
                     >
                       <span className="absolute top-4 left-4 text-xs font-medium text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-lg">
-                        {isCardFlipped ? 'Définition (Verso)' : 'Notion / Concept (Recto)'}
+                        {isCardFlipped ? 'Définition (Verso)' : 'Notion (Recto)'}
                       </span>
                       <button
                         onClick={(e) => {
@@ -848,126 +870,71 @@ export default function App() {
                       </button>
 
                       <div className="my-6 max-w-md">
-                        <h3 className={`font-bold transition-all ${isCardFlipped ? 'text-base text-slate-800' : 'text-2xl text-slate-900'}`}>
+                        <h3 className={`font-bold transition-all ${isCardFlipped ? 'text-base text-slate-800 font-normal' : 'text-2xl text-slate-900'}`}>
                           {isCardFlipped ? currentStep.data.back : currentStep.data.front}
                         </h3>
                       </div>
 
-                      <p className="text-xs text-slate-400 italic">Cliquez sur la carte pour voir la définition</p>
-                  </div>
-
-                  <button
-                    onClick={advanceToNextStep}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition shadow-sm flex items-center justify-center space-x-2"
-                  >
-                    <span>Carte suivante</span>
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-            )}
-
-            {/* Quiz QCM */}
-            {currentStep.type === 'quiz' && (
-                <div className="space-y-6">
-                  <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                    <span>Question du Cours</span>
-                  </div>
-
-                  <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-                    <h3 className="text-lg font-bold text-slate-900">{currentStep.data.question}</h3>
-                  </div>
-
-                  <div className="space-y-3">
-                    {currentStep.data.options.map((option, idx) => {
-                      let btnStyle = "bg-white border-slate-200 text-slate-800 hover:border-indigo-400";
-                      if (selectedAnswer !== null) {
-                        if (idx === currentStep.data.correctAnswer) {
-                          btnStyle = "bg-green-50 border-green-500 text-green-900 font-semibold";
-                        } else if (idx === selectedAnswer) {
-                          btnStyle = "bg-red-50 border-red-500 text-red-900";
-                        } else {
-                          btnStyle = "opacity-50 bg-white border-slate-200 text-slate-500";
-                        }
-                      }
-
-                      return (
-                        <button
-                          key={idx}
-                          onClick={() => handleAnswerSelect(idx)}
-                          disabled={selectedAnswer !== null}
-                          className={`w-full p-4 rounded-xl border-2 text-left transition flex justify-between items-center ${btnStyle}`}
-                        >
-                          <span className="text-sm">{option}</span>
-                          {selectedAnswer !== null && idx === currentStep.data.correctAnswer && (
-                            <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
-                          )}
-                          {selectedAnswer !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && (
-                            <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {stepResultState !== null && (
-                    <div className="space-y-4 pt-2 animate-fade-in">
-                      <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-                        <p className="font-semibold mb-1">{stepResultState === 'correct' ? '✨ Bonne réponse !' : '❌ Pas tout à fait.'}</p>
-                        <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
-                      </div>
-                      <button
-                        onClick={advanceToNextStep}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
-                      >
-                        <span>Étape suivante</span>
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
+                      <p className="text-xs text-slate-400 italic">Cliquez sur la carte pour retourner</p>
                     </div>
-                  )}
-                </div>
-          )}
 
-          {/* Texte à trous */}
-          {currentStep.type === 'fillblank' && (
-                <div className="space-y-6">
-                  <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                    <span>Texte à Trous (Mémorisation)</span>
+                    <button
+                      onClick={advanceToNextStep}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition shadow-sm flex items-center justify-center space-x-2"
+                    >
+                      <span>Carte suivante</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
                   </div>
+                )}
 
-                  <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-                    <h3 className="text-lg font-medium text-slate-900">
-                      {currentStep.data.sentenceWithBlank}
-                    </h3>
-                  </div>
+                {/* Quiz QCM */}
+                {currentStep.type === 'quiz' && (
+                  <div className="space-y-6">
+                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      <span>Question du Cours</span>
+                    </div>
 
-                  <div className="space-y-3">
-                    <input
-                      type="text"
-                      value={userBlankInput}
-                      onChange={(e) => setUserBlankInput(e.target.value)}
-                      disabled={stepResultState !== null}
-                      placeholder="Écrivez le mot manquant..."
-                      className="w-full p-4 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && stepResultState === null) {
-                          handleCheckFillBlank();
+                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                      <h3 className="text-lg font-bold text-slate-900">{currentStep.data.question}</h3>
+                    </div>
+
+                    <div className="space-y-3">
+                      {currentStep.data.options.map((option, idx) => {
+                        let btnStyle = "bg-white border-slate-200 text-slate-800 hover:border-indigo-400";
+                        if (selectedAnswer !== null) {
+                          if (idx === currentStep.data.correctAnswer) {
+                            btnStyle = "bg-green-50 border-green-500 text-green-900 font-semibold";
+                          } else if (idx === selectedAnswer) {
+                            btnStyle = "bg-red-50 border-red-500 text-red-900";
+                          } else {
+                            btnStyle = "opacity-50 bg-white border-slate-200 text-slate-500";
+                          }
                         }
-                      }}
-                    />
-                    {stepResultState === null ? (
-                      <button
-                        onClick={handleCheckFillBlank}
-                        disabled={!userBlankInput.trim()}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition shadow-sm"
-                      >
-                        Vérifier
-                      </button>
-                    ) : (
-                      <div className="space-y-4 animate-fade-in">
+
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => handleAnswerSelect(idx)}
+                            disabled={selectedAnswer !== null}
+                            className={`w-full p-4 rounded-xl border-2 text-left transition flex justify-between items-center ${btnStyle}`}
+                          >
+                            <span className="text-sm">{option}</span>
+                            {selectedAnswer !== null && idx === currentStep.data.correctAnswer && (
+                              <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
+                            )}
+                            {selectedAnswer !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && (
+                              <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {stepResultState !== null && (
+                      <div className="space-y-4 pt-2 animate-fade-in">
                         <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-                          <p className="font-semibold mb-1">
-                            {stepResultState === 'correct' ? '✨ C\'est exact !' : `❌ Le mot attendu était : "${currentStep.data.missingWord}"`}
-                          </p>
+                          <p className="font-semibold mb-1">{stepResultState === 'correct' ? '✨ Bonne réponse !' : '❌ Pas tout à fait.'}</p>
                           <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
                         </div>
                         <button
@@ -980,99 +947,154 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                </div>
-          )}
-        </div>
-          ) : (
-            <div className="text-center space-y-6 py-8">
-              <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto text-amber-600">
-                <Award className="w-10 h-10" />
-              </div>
-              <div className="space-y-2">
-                <h2 className="text-2xl font-bold text-slate-900">Session Terminée ! 🎉</h2>
-                <p className="text-sm text-slate-600">Bravo pour tes efforts de révision !</p>
-              </div>
+                )}
 
-              <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-sm mx-auto space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-600">Score final :</span>
-                  <span className="font-bold text-indigo-600">{score} pts</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-600">Matière :</span>
-                  <span className="font-bold text-slate-800">{selectedSubject}</span>
-                </div>
-              </div>
+                {/* Texte à trous */}
+                {currentStep.type === 'fillblank' && (
+                  <div className="space-y-6">
+                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      <span>Texte à Trous</span>
+                    </div>
 
-              <div className="flex justify-center space-x-3">
-                <button
-                  onClick={() => startSession()}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition flex items-center space-x-2 shadow-sm"
-                >
-                  <RotateCw className="w-4 h-4" />
-                  <span>Recommencer</span>
-                </button>
-                <button
-                  onClick={() => setActiveTab('home')}
-                  className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-6 py-3 rounded-xl text-sm font-medium transition"
-                >
-                  Accueil
-                </button>
-              </div>
-          </div>
-        )}
-      </div>
-    )}
+                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                      <h3 className="text-lg font-medium text-slate-900">
+                        {currentStep.data.sentenceWithBlank}
+                      </h3>
+                    </div>
 
-    {/* MES DECKS */}
-    {activeTab === 'decks' && (
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-bold text-slate-900">Mes Decks de Cours Enregistrés</h2>
-          <span className="text-xs bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg font-semibold">
-            {savedDecks.length} deck(s)
-          </span>
-        </div>
-
-        {savedDecks.length === 0 ? (
-          <div className="text-center py-12 text-slate-400 space-y-2">
-            <Folder className="w-12 h-12 mx-auto opacity-40" />
-            <p className="text-sm">Aucun deck enregistré pour le moment.</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {savedDecks.map((deck) => (
-              <div key={deck.id} className="p-4 rounded-xl border border-slate-200 hover:border-indigo-300 transition flex justify-between items-center bg-slate-50/50">
-                <div className="space-y-1">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-medium">{deck.subject}</span>
-                    <span className="text-xs text-slate-400">{deck.date}</span>
+                    <div className="space-y-3">
+                      <input
+                        type="text"
+                        value={userBlankInput}
+                        onChange={(e) => setUserBlankInput(e.target.value)}
+                        disabled={stepResultState !== null}
+                        placeholder="Écrivez le mot manquant..."
+                        className="w-full p-4 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && stepResultState === null) {
+                            handleCheckFillBlank();
+                          }
+                        }}
+                      />
+                      {stepResultState === null ? (
+                        <button
+                          onClick={handleCheckFillBlank}
+                          disabled={!userBlankInput.trim()}
+                          className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition shadow-sm"
+                        >
+                          Vérifier
+                        </button>
+                      ) : (
+                        <div className="space-y-4 animate-fade-in">
+                          <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                            <p className="font-semibold mb-1">
+                              {stepResultState === 'correct' ? '✨ C\'est exact !' : `❌ Le mot attendu était : "${currentStep.data.missingWord}"`}
+                            </p>
+                            <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
+                          </div>
+                          <button
+                            onClick={advanceToNextStep}
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
+                          >
+                            <span>Étape suivante</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <h3 className="text-sm font-bold text-slate-800">{deck.title}</h3>
+                )}
+              </div>
+            ) : (
+              <div className="text-center space-y-6 py-8">
+                <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto text-amber-600">
+                  <Award className="w-10 h-10" />
                 </div>
-                <div className="flex items-center space-x-2">
+                <div className="space-y-2">
+                  <h2 className="text-2xl font-bold text-slate-900">Session Terminée ! 🎉</h2>
+                  <p className="text-sm text-slate-600">Bravo pour tes efforts de révision !</p>
+                </div>
+
+                <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-sm mx-auto space-y-3">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-600">Score final :</span>
+                    <span className="font-bold text-indigo-600">{score} pts</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-600">Matière :</span>
+                    <span className="font-bold text-slate-800">{selectedSubject}</span>
+                  </div>
+                </div>
+
+                <div className="flex justify-center space-x-3">
                   <button
-                    onClick={() => handleLoadDeck(deck)}
-                    className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium flex items-center space-x-1"
-                    title="Lancer"
+                    onClick={() => startSession()}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition flex items-center space-x-2 shadow-sm"
                   >
-                    <Play className="w-3.5 h-3.5" />
+                    <RotateCw className="w-4 h-4" />
+                    <span>Recommencer</span>
                   </button>
                   <button
-                    onClick={() => handleDeleteDeck(deck.id)}
-                    className="p-2 bg-slate-200 hover:bg-red-100 text-slate-600 hover:text-red-600 rounded-xl transition"
-                    title="Supprimer"
+                    onClick={() => setActiveTab('home')}
+                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-6 py-3 rounded-xl text-sm font-medium transition"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    Accueil
                   </button>
                 </div>
               </div>
-            ))}
+            )}
           </div>
         )}
-    </div>
-  )}
-    </main>
-  </div>
-);
+
+        {/* MES DECKS */}
+        {activeTab === 'decks' && (
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-bold text-slate-900">Mes Decks de Cours Enregistrés</h2>
+              <span className="text-xs bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg font-semibold">
+                {savedDecks.length} deck(s)
+              </span>
+            </div>
+
+            {savedDecks.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 space-y-2">
+                <Folder className="w-12 h-12 mx-auto opacity-40" />
+                <p className="text-sm">Aucun deck enregistré pour le moment.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {savedDecks.map((deck) => (
+                  <div key={deck.id} className="p-4 rounded-xl border border-slate-200 hover:border-indigo-300 transition flex justify-between items-center bg-slate-50/50">
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-medium">{deck.subject}</span>
+                        <span className="text-xs text-slate-400">{deck.date}</span>
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-800">{deck.title}</h3>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => handleLoadDeck(deck)}
+                        className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium flex items-center space-x-1"
+                        title="Lancer"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteDeck(deck.id)}
+                        className="p-2 bg-slate-200 hover:bg-red-100 text-slate-600 hover:text-red-600 rounded-xl transition"
+                        title="Supprimer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+   </div>
+  );
 }
