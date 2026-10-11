@@ -5,14 +5,6 @@ import {
   Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save, RotateCw, Wand2, Settings, Search
 } from 'lucide-react';
 
-const STOP_WORDS = new Set([
-  'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'l', 'ce', 'cette', 'ces',
-  'mon', 'ton', 'son', 'ma', 'ta', 'sa', 'mes', 'tes', 'ses', 'nos', 'vos', 'leurs',
-  'qui', 'que', 'quoi', 'dont', 'où', 'quand', 'comment', 'pourquoi', 'quel', 'quelle', 'quels', 'quelles',
-  'est', 'sont', 'a', 'ont', 'fait', 'fais', 'font', 'pour', 'dans', 'sur', 'avec', 'sans', 'par',
-  'et', 'ou', 'mais', 'donc', 'car', 'ni', 'or', 'plus', 'moins', 'tres', 'aussi', 'bien', 'autre', 'aux'
-]);
-
 const speakText = (text) => {
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     window.speechSynthesis.cancel();
@@ -22,7 +14,7 @@ const speakText = (text) => {
   }
 };
 
-// --- NETTOYAGE ET RECONSTITUTION DES PHRASES (COMPATIBLE MOBILE) ---
+// --- NETTOYAGE UNIFIÉ ET ROBUSTE (MOBILE & PC) ---
 function cleanAndStructureRawText(rawText) {
   if (!rawText) return '';
 
@@ -67,10 +59,10 @@ function cleanAndStructureRawText(rawText) {
   return cleanedLines.join('\n\n');
 }
 
-// --- EXTRACTION INTELLIGENTE DU COURS (POUR TOUT TYPE DE TEXTE) ---
+// --- ANALYSE CONTEXTUELLE DU COURS ---
 function extractAllDefinitionsFromText(sourceText) {
   const cleanedText = cleanAndStructureRawText(sourceText);
-  const rawSentences = cleanedText.split(/(?<=[.!?])\s+|\n+/).filter(s => s.trim().length > 20);
+  const rawSentences = cleanedText.split(/(?<=[.!?])\s+|\n+/).filter(s => s.trim().length > 15);
   const concepts = [];
 
   rawSentences.forEach((sentence) => {
@@ -89,7 +81,7 @@ function extractAllDefinitionsFromText(sourceText) {
     }
 
     const words = cleanS.split(' ');
-    if (words.length >= 5) {
+    if (words.length >= 4) {
       const potentialTerm = words.slice(0, 3).join(' ').replace(/[,;:]/g, '');
       const term = potentialTerm.charAt(0).toUpperCase() + potentialTerm.slice(1);
       if (!concepts.some(c => c.def === cleanS)) {
@@ -105,26 +97,26 @@ function extractAllDefinitionsFromText(sourceText) {
   return concepts;
 }
 
-// --- GENERATION PAR IA ---
+// --- GENERATION PAR IA (COMPRÉHENSION PROFONDE DU COURS) ---
 async function generateExercisesWithExternalAI(sourceText, apiKey) {
   const cleanKey = apiKey.trim();
   const isGeminiKey = cleanKey.startsWith('AIza') || !cleanKey.startsWith('sk-');
   const structuredText = cleanAndStructureRawText(sourceText);
 
   const promptText = `
-Tu es un professeur et expert pédagogique. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
-RÈGLE ABSOLUE : Ne coupe jamais les phrases au milieu. Les définitions doivent être ENTIÈRES et COMPLÈTES jusqu'au point final.
+Tu es un professeur expert en pédagogie. Analyse le cours fourni ci-dessous en profondeur, comprends les notions clés abordées, et génère un jeu de révision complet et fidèle au format JSON STRICT.
+RÈGLE ABSOLUE : Ne coupe jamais les phrases au milieu. Les définitions et explications doivent être ENTIÈRES et COMPLÈTES jusqu'au point final.
 
 CONSIGNES DE FORMATAGE :
-1. "questions" : Crée 5 QCM de niveau collège/lycée :
-   - 'question' : Commence par un mot interrogatif ("Qui", "Que", "Quoi", "Comment", "Pourquoi") et finit par "?".
-   - 'options' : 4 réponses complètes (1 bonne définition intégrale + 3 fausses). Chaque option commence par une majuscule et finit par ".".
+1. "questions" : Crée 5 à 8 QCM basés strictement sur le contenu du cours :
+   - 'question' : Une question claire commençant par un mot interrogatif ("Qui", "Que", "Quoi", "Comment", "Pourquoi") et finissant par "?".
+   - 'options' : 4 réponses (1 bonne réponse exacte tirée ou déduite du cours + 3 fausses propositions crédibles). Chaque option commence par une majuscule et finit par ".".
    - 'correctAnswer' : l'index (0, 1, 2 ou 3).
-   - 'explanation' : Une explication complète finissant par ".".
+   - 'explanation' : Une explication pédagogique complète finissant par ".".
 2. "flashcards" : Crée 5 cartes mémoires :
-   - 'front' : LA DÉFINITION COMPLÈTE ET ENTIÈRE (finissant par un point ".").
-   - 'back' : LE MOT-CLÉ / CONCEPT À DEVINER.
-3. "fillBlanks" : 3 à 5 phrases à trous portant sur des termes clés.
+   - 'front' : LA NOTION OU LA DÉFINITION COMPLÈTE DU COURS.
+   - 'back' : LE CONCEPT OU LE MOT-CLÉ ASSOCIÉ.
+3. "fillBlanks" : 3 phrases à trous portant sur des termes clés du cours.
 
 TEXTE DU COURS :
 """${structuredText.slice(0, 6000)}"""
@@ -134,7 +126,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   "questions": [
     {
       "id": 1,
-      "question": "Que sont... ?",
+      "question": "Que nous apprend le cours sur... ?",
       "options": ["Proposition 1.", "Proposition 2.", "Proposition 3.", "Proposition 4."],
       "correctAnswer": 0,
       "explanation": "Explication complète."
@@ -144,7 +136,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
     { "id": 1, "front": "Définition complète.", "back": "Concept" }
   ],
   "fillBlanks": [
-    { "id": 1, "sentenceWithBlank": "La [___] permet...", "missingWord": "Mot", "explanation": "Explication." }
+    { "id": 1, "sentenceWithBlank": "La notion de [___] permet...", "missingWord": "Mot", "explanation": "Explication." }
   ]
 }
 `;
@@ -204,7 +196,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL RICHE ET FIDÈLE AU COURS ---
+// --- MOTEUR LOCAL DE SECOURS INTELLIGENT ---
 function generateAllExercisesLocal(sourceText) {
   const allDefs = extractAllDefinitionsFromText(sourceText);
   const shuffledDefs = [...allDefs].sort(() => Math.random() - 0.5);
@@ -266,29 +258,18 @@ function generateAllExercisesLocal(sourceText) {
     });
   });
 
-  const defaultQ = [{
-    id: 1,
-    question: "Quel est le sujet principal abordé dans le texte importé ?",
-    options: ["Le contenu détaillé de la leçon analysée.", "Une thématique sans rapport.", "Une formule mathématique isolée.", "Un élément historique externe."],
-    correctAnswer: 0,
-    explanation: "Le cours fourni sert de base unique aux questions."
-  }];
-
-  const defaultFc = [{ id: 1, front: "Notion principale extraite du cours importé.", back: "Concept clé" }];
-  const defaultFb = [{ id: 1, sentenceWithBlank: "Le cours traite de [___] principaux.", missingWord: "points", explanation: "Basé sur l'analyse globale du texte." }];
-
   return {
-    questions: generatedQuestions.length > 0 ? generatedQuestions : defaultQ,
-    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : defaultFc,
-    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : defaultFb
+    questions: generatedQuestions.length > 0 ? generatedQuestions : [{ id: 1, question: "Le texte est-il suffisant ?", options: ["Oui.", "Non.", "Peut-être.", "Inconnu."], correctAnswer: 0, explanation: "Veuillez fournir un texte plus riche." }],
+    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : [{ id: 1, front: "Notion principale", back: "Concept" }],
+    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : [{ id: 1, sentenceWithBlank: "Le cours traite de [___].", missingWord: "sujets", explanation: "Analyse globale." }]
   };
 }
 
 function buildSessionSteps(questions, flashcards, fillBlanks) {
   const steps = [];
   const shuffledFc = [...(flashcards || [])].sort(() => Math.random() - 0.5).slice(0, 5);
-  const shuffledQ = [...(questions || [])].sort(() => Math.random() - 0.5).slice(0, 5);
-  const shuffledFb = [...(fillBlanks || [])].sort(() => Math.random() - 0.5).slice(0, 3);
+  const shuffledQ = [...(questions || [])].sort(() => Math.random() - 0.5).slice(0, 6);
+  const shuffledFb = [...(fillBlanks || [])].sort(() => Math.random() - 0.5).slice(0, 4);
 
   shuffledFc.forEach((fc) => steps.push({ type: 'flashcard', data: fc }));
 
@@ -510,7 +491,7 @@ export default function App() {
     const cleanedText = cleanAndStructureRawText(textToProcess);
     
     if (!cleanedText || cleanedText.length < 20) {
-      setUploadError("Le texte du cours est trop court ou vide.");
+      setUploadError("Le texte du cours est trop court ou vide. Veuillez vérifier l'import.");
       return;
     }
     setIsAnalyzing(true);
@@ -518,11 +499,11 @@ export default function App() {
     try {
       let generated;
       if (apiKey && apiKey.trim().length > 5) {
-        setOcrProgress("Génération variée des exercices par l'IA...");
+        setOcrProgress("L'IA analyse et comprend votre leçon...");
         try {
           generated = await generateExercisesWithExternalAI(cleanedText, apiKey);
         } catch (apiErr) {
-          console.warn("IA indisponible, passage sur le moteur local :", apiErr);
+          console.warn("IA indisponible, bascule sur le moteur local :", apiErr);
           setOcrProgress("Moteur local : analyse du cours...");
           generated = generateAllExercisesLocal(cleanedText);
         }
@@ -548,7 +529,7 @@ export default function App() {
       startSession(generated.questions, generated.flashcards, generated.fillBlanks);
     } catch (e) {
       console.error(e);
-      setUploadError("Une erreur est survenue lors de l'analyse.");
+      setUploadError("Une erreur est survenue lors de l'analyse du cours.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -571,7 +552,7 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       if (videoRef.current) videoRef.current.srcObject = stream;
     } catch {
-      setUploadError("Impossible d'accéder à la caméra de l'appareil.");
+      setUploadError("Impossible d'accéder à la caméra. Vérifiez les autorisations de votre navigateur mobile.");
       setIsCameraActive(false);
     }
   };
@@ -587,8 +568,8 @@ export default function App() {
   const capturePhoto = () => {
     if (!videoRef.current) return;
     const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth || 640;
-    canvas.height = videoRef.current.videoHeight || 480;
+    canvas.width = videoRef.current.videoWidth || 1280;
+    canvas.height = videoRef.current.videoHeight || 720;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     stopCamera();
@@ -597,14 +578,17 @@ export default function App() {
 
   const processImageOCR = async (imageSrc) => {
     setIsAnalyzing(true);
-    setOcrProgress("Extraction du texte de la photo...");
+    setOcrProgress("Lecture de la photo (OCR mobile)...");
 
     try {
       if (!window.Tesseract) {
         const script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
         document.head.appendChild(script);
-        await new Promise((resolve) => (script.onload = resolve));
+        await new Promise((resolve, reject) => {
+          script.onload = resolve;
+          script.onerror = () => reject(new Error("Échec du chargement du module OCR. Vérifiez votre connexion."));
+        });
       }
 
       const worker = await window.Tesseract.createWorker('fra');
@@ -612,14 +596,14 @@ export default function App() {
       await worker.terminate();
 
       const text = ret.data.text;
-      if (!text || !text.trim()) throw new Error("Aucun texte lisible trouvé.");
+      if (!text || !text.trim()) throw new Error("Aucun texte lisible n'a été détecté sur l'image.");
 
       const cleaned = cleanAndStructureRawText(text);
       setRawInputText(cleaned);
       setOcrProgress('');
       setIsAnalyzing(false);
     } catch (err) {
-      setUploadError(err.message || "Erreur de lecture de l'image.");
+      setUploadError(err.message || "Erreur de lecture de l'image sur ce mobile.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -634,7 +618,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction et nettoyage du PDF...");
+        setOcrProgress("Extraction et lecture du PDF...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -677,7 +661,7 @@ export default function App() {
         }
 
         const cleanedText = cleanAndStructureRawText(fullText);
-        if (!cleanedText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
+        if (!cleanedText.trim()) throw new Error("Le fichier PDF ne contient pas de texte extractible.");
 
         setRawInputText(cleanedText);
         setOcrProgress('');
@@ -696,7 +680,7 @@ export default function App() {
         reader.readAsText(file);
       }
     } catch (err) {
-      setUploadError(err.message || "Erreur lors du traitement.");
+      setUploadError(err.message || "Erreur lors du traitement du fichier.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -715,7 +699,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.6</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.7</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -739,7 +723,7 @@ export default function App() {
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
                 <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Mobile & PC</h2>
-                <p className="text-slate-600 text-sm mt-1">Importez votre cours, vérifiez le texte, puis lancez la génération à votre rythme.</p>
+                <p className="text-slate-600 text-sm mt-1">Importez votre cours par photo, PDF ou texte. L'application génère des exercices adaptés.</p>
               </div>
 
               <div className="space-y-2">
@@ -770,7 +754,7 @@ export default function App() {
               <div className="border-t border-slate-100 my-2"></div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Importer le cours (PDF ou Photo)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Importer le document de cours</label>
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
                     <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
@@ -792,25 +776,25 @@ export default function App() {
                     <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
                       <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <Upload className="w-6 h-6 text-indigo-500 mb-1" />
-                      <span className="text-sm font-semibold text-slate-700">Importer le PDF du cours</span>
+                      <span className="text-sm font-semibold text-slate-700">Importer le PDF ou l'image du cours</span>
                     </div>
                   </div>
                 )}
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Coller le texte du cours (optionnel)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Vérifier ou coller le texte du cours</label>
                 <textarea
                   rows="6"
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Ou collez directement le contenu brut de votre leçon ici..."
+                  placeholder="Le texte extrait apparaîtra ici, ou vous pouvez le coller directement..."
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
                 ></textarea>
                 <div className="flex flex-wrap gap-2 justify-between items-center">
                   <div className="flex space-x-2">
                     <button onClick={handleCleanTextButton} className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-medium flex items-center space-x-1">
-                      <Wand2 className="w-3.5 h-3.5" /> <span>Nettoyer le texte</span>
+                      <Wand2 className="w-3.5 h-3.5" /> <span>Nettoyer</span>
                     </button>
                     <button onClick={handleClearText} className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg text-xs font-medium flex items-center space-x-1">
                       <Trash2 className="w-3.5 h-3.5" /> <span>Effacer</span>
@@ -1110,7 +1094,7 @@ export default function App() {
           <div className="space-y-4">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <h3 className="text-xl font-bold text-slate-900">Paramètres & Clé API IA</h3>
-              <p className="text-slate-600 text-sm">Configurez votre clé API Gemini ou OpenAI pour une génération IA avancée, ou laissez vide pour utiliser le moteur local par défaut.</p>
+              <p className="text-slate-600 text-sm">Pour que l'IA comprenne vos cours à 100% sur mobile comme sur PC, configurez votre clé API Gemini (gratuite sur Google AI Studio) ou OpenAI.</p>
 
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Clé API (Gemini / OpenAI)</label>
