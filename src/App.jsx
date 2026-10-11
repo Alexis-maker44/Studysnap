@@ -29,17 +29,18 @@ async function generateExercisesWithExternalAI(sourceText, apiKey) {
 
   const promptText = `
 Tu es un professeur d'histoire-géo et expert pédagogique bienveillant. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT. 
-IGNORE COMPLÈTEMENT les liens internet (comme http ou https), les adresses web, les numéros de page et les éléments parasites. Concentre-toi uniquement sur les notions et définitions du cours.
+IGNORE COMPLÈTEMENT les liens internet (http, https), les adresses web, les numéros de page et les éléments parasites.
+VEILLE À CE QUE TOUTES LES PHRASES DE DÉFINITION SOIENT ENTIÈRES ET COMPLÈTES (ne coupe jamais une phrase au milieu !).
 
 CONSIGNES STRICTES DE FORMATAGE :
 1. "questions" : Crée 5 QCM de niveau collège. Pour chaque question :
    - 'question' : Doit OBLIGATOIREMENT commencer par un mot interrogatif ("Qui", "Que", "Quoi", "Comment" ou "Pourquoi") et se terminer par un point d'interrogation "?" (ex: "Que sont les Lumières ?", "Qu'est-ce qu'un philosophe ?").
-   - 'options' : 4 réponses crédibles et élaborées. Chaque option DOIT commencer par une majuscule et se terminer par un point ".".
+   - 'options' : 4 réponses crédibles, complètes et élaborées. Chaque option DOIT commencer par une majuscule et se terminer par un point ".".
    - 'correctAnswer' : l'index (0, 1, 2 ou 3) de la bonne réponse.
-   - 'explanation' : une explication claire commençant par une majuscule et se terminant par un point ".".
+   - 'explanation' : une explication claire et COMPLÈTE commençant par une majuscule et se terminant par un point ".".
 2. "flashcards" : Crée 5 cartes mémoires basées sur les définitions du cours. 
-   - 'front' : SEULEMENT le nom du concept ou terme clé (2 à 5 mots maximum, ex: "Les Lumières", "Raison").
-   - 'back' : La définition complète ou explication détaillée tirée du cours, commençant par une majuscule et se terminant par un point ".".
+   - 'front' : LA DÉFINITION COMPLÈTE (une phrase entière qui commence par une majuscule et finit par un point ".").
+   - 'back' : LE MOT-CLÉ / NOM DU CONCEPT À TROUVER (ex: "Les Lumières", "La raison", "Un philosophe").
 3. "fillBlanks" : 3 à 5 phrases à trous portant sur les termes essentiels du cours.
 
 TEXTE DU COURS :
@@ -57,7 +58,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
     }
   ],
   "flashcards": [
-    { "id": 1, "front": "Nom du concept", "back": "Explication complète du concept." }
+    { "id": 1, "front": "Ensemble d'idées nouvelles, formulées par des philosophes et des savants, qui circulent en Europe au XVIIIe siècle.", "back": "Les Lumières" }
   ],
   "fillBlanks": [
     { "id": 1, "sentenceWithBlank": "La fonction [___] permet de traiter les données.", "missingWord": "principale", "explanation": "Rappel de la règle." }
@@ -120,19 +121,21 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL DE SECOURS (FILTRAGE STRICT DES DÉFINITIONS) ---
+// --- MOTEUR LOCAL DE SECOURS (AVEC FUSION DES PHRASES MULTI-LIGNES) ---
 function semanticParagraphAnalysis(sourceText) {
   if (!sourceText) return [];
 
-  const lines = sourceText.split('\n');
+  // Nettoyage global du texte : fusion des sauts de ligne intempestifs
+  const cleanSource = sourceText
+    .replace(/(http|www)\S+/gi, '') // Supprime liens
+    .replace(/([a-zà-öø-ÿ,])\n([a-zà-öø-ÿ])/gi, '$1 $2'); // Recolle les phrases coupées en milieu de ligne
+
+  const lines = cleanSource.split('\n');
   const semanticPairs = [];
 
   lines.forEach((line) => {
     const trimmed = line.trim();
-    // Ignore les liens, URLs, numéros de page ou lignes trop courtes
-    if (!trimmed || trimmed.toLowerCase().includes('http') || trimmed.toLowerCase().includes('www') || trimmed.length < 15) {
-      return;
-    }
+    if (!trimmed || trimmed.length < 15) return;
 
     // Recherche du format "Terme : Définition"
     const match = trimmed.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,40})\s*[:–—]\s*(.{15,})$/);
@@ -140,7 +143,6 @@ function semanticParagraphAnalysis(sourceText) {
       let term = match[1].trim();
       let def = match[2].trim();
 
-      // Nettoyage et mise en forme (Majuscule initiale, point final)
       term = term.charAt(0).toUpperCase() + term.slice(1);
       if (!def.endsWith('.')) def += '.';
       def = def.charAt(0).toUpperCase() + def.slice(1);
@@ -166,10 +168,11 @@ function generateAllExercisesLocal(sourceText) {
   const generatedFillBlanks = [];
 
   pairs.forEach((pair, index) => {
+    // INVERSION : RECTO = DÉFINITION COMPLÈTE | VERSO = MOT À TROUVER
     generatedFlashcards.push({
       id: index + 1,
-      front: pair.term,
-      back: pair.def
+      front: pair.def,
+      back: pair.term
     });
 
     const words = pair.term.split(' ');
@@ -209,12 +212,11 @@ function generateAllExercisesLocal(sourceText) {
 
     const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
 
-    // Formulation stricte : Commence par "Que", "Qu'est-ce que", etc. et finit par "?"
-    let qText = `Que sont ${pair.term.toLowerCase()} ?`;
-    if (pair.term.toLowerCase().startsWith('le ') || pair.term.toLowerCase().startsWith('la ') || pair.term.toLowerCase().startsWith('un ') || pair.term.toLowerCase().startsWith('une ')) {
+    let qText = `Que désigne « ${pair.term} » ?`;
+    if (pair.term.toLowerCase().startsWith('les ') || pair.term.toLowerCase().startsWith('des ')) {
+      qText = `Que sont ${pair.term.toLowerCase()} ?`;
+    } else if (pair.term.toLowerCase().startsWith('le ') || pair.term.toLowerCase().startsWith('la ') || pair.term.toLowerCase().startsWith('un ') || pair.term.toLowerCase().startsWith('une ')) {
       qText = `Qu'est-ce que ${pair.term.toLowerCase()} ?`;
-    } else {
-      qText = `Que désigne « ${pair.term} » ?`;
     }
 
     generatedQuestions.push({
@@ -234,7 +236,7 @@ function generateAllExercisesLocal(sourceText) {
     explanation: "La révision active stimule la mémoire à long terme."
   }];
 
-  const defaultFc = [{ id: 1, front: "Révision active", back: "Méthode consistant à se poser des questions plutôt que de simplement relire." }];
+  const defaultFc = [{ id: 1, front: "Ensemble d'idées nouvelles, formulées par des philosophes et des savants, qui circulent en Europe au XVIIIe siècle.", back: "Les Lumières" }];
   const defaultFb = [{ id: 1, sentenceWithBlank: "L'apprentissage [___] est le plus efficace.", missingWord: "actif", explanation: "Implique de chercher les réponses." }];
 
   return {
@@ -591,46 +593,45 @@ export default function App() {
           window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         }
 
-      	const arrayBuffer = await file.arrayBuffer();
-      	const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      	let fullText = '';
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = '';
 
-      	for (let i = 1; i <= pdf.numPages; i++) {
-      	  const page = await pdf.getPage(i);
-      	  const tokenized = await page.getTextContent();
-      	  
-      	  const items = tokenized.items.sort((a, b) => {
-      	    const yA = a.transform[5];
-      	    const yB = b.transform[5];
-      	    if (Math.abs(yA - yB) > 5) {
-      	      return yB - yA;
-      	    }
-      	    return a.transform[4] - b.transform[4];
-      	  });
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const tokenized = await page.getTextContent();
+          
+          const items = tokenized.items.sort((a, b) => {
+            const yA = a.transform[5];
+            const yB = b.transform[5];
+            if (Math.abs(yA - yB) > 5) {
+              return yB - yA;
+            }
+            return a.transform[4] - b.transform[4];
+          });
 
-      	  let lastY = null;
-      	  let pageText = '';
-      	  items.forEach((item) => {
-      	    const y = item.transform[5];
-      	    // Ignore liens internet ou URL dans le PDF
-      	    if (item.str.toLowerCase().includes('http') || item.str.toLowerCase().includes('www')) return;
+          let lastY = null;
+          let pageText = '';
+          items.forEach((item) => {
+            const y = item.transform[5];
+            if (item.str.toLowerCase().includes('http') || item.str.toLowerCase().includes('www')) return;
 
-      	    if (lastY !== null && Math.abs(y - lastY) > 6) {
-      	      pageText += '\n';
-      	    } else if (pageText.length > 0 && !pageText.endsWith(' ')) {
-      	      pageText += ' ';
-      	    }
-      	    pageText += item.str;
-      	    lastY = y;
-      	  });
-      	  fullText += pageText + '\n\n';
-    	}
+            if (lastY !== null && Math.abs(y - lastY) > 6) {
+              pageText += '\n';
+            } else if (pageText.length > 0 && !pageText.endsWith(' ')) {
+              pageText += ' ';
+            }
+            pageText += item.str;
+            lastY = y;
+          });
+          fullText += pageText + '\n\n';
+        }
 
-    	if (!fullText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
+        if (!fullText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
 
-    	setRawInputText(fullText);
-    	setOcrProgress('');
-    	await handleProcessText(fullText);
+        setRawInputText(fullText);
+        setOcrProgress('');
+        await handleProcessText(fullText);
       } else if (file.type.startsWith('image/')) {
         const reader = new FileReader();
         reader.onload = (e) => processImageOCR(e.target.result);
@@ -643,454 +644,454 @@ export default function App() {
         };
         reader.readAsText(file);
       }
-  	} catch (err) {
-  	  setUploadError(err.message || "Erreur lors du traitement.");
-  	  setIsAnalyzing(false);
-  	  setOcrProgress('');
-  	}
+    } catch (err) {
+      setUploadError(err.message || "Erreur lors du traitement.");
+      setIsAnalyzing(false);
+      setOcrProgress('');
+    }
   };
 
   const currentStep = sessionSteps[currentStepIdx];
 
   return (
-  	<div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
-  	  <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
-  	    <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
-  	      <Brain className="w-8 h-8 text-amber-300" />
-  	      <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v4.0</span></h1>
-  	    </div>
-  	    <nav className="flex space-x-2">
-  	      <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
-  	        <Home className="w-4 h-4" /> <span className="hidden md:inline">Accueil</span>
-  	      </button>
-  	      <button onClick={() => startSession()} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'session' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
-  	        <Play className="w-4 h-4" /> <span className="hidden md:inline">Révision Active</span>
-  	      </button>
-  	      <button onClick={() => setActiveTab('decks')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'decks' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
-  	        <Folder className="w-4 h-4" /> <span className="hidden md:inline">Mes Decks</span>
-  	      </button>
-  	    </nav>
-  	  </header>
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
+      <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
+        <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
+          <Brain className="w-8 h-8 text-amber-300" />
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v4.1</span></h1>
+        </div>
+        <nav className="flex space-x-2">
+          <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
+            <Home className="w-4 h-4" /> <span className="hidden md:inline">Accueil</span>
+          </button>
+          <button onClick={() => startSession()} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'session' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
+            <Play className="w-4 h-4" /> <span className="hidden md:inline">Révision Active</span>
+          </button>
+          <button onClick={() => setActiveTab('decks')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'decks' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
+            <Folder className="w-4 h-4" /> <span className="hidden md:inline">Mes Decks</span>
+          </button>
+        </nav>
+      </header>
 
-  	  <main className="max-w-3xl mx-auto p-4 md:p-6">
-  	    {/* ACCUEIL */}
-  	    {activeTab === 'home' && (
-  	      <div className="space-y-6">
-  	        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
-  	          <div className="text-center">
-  	            <h2 className="text-2xl font-bold text-slate-900">Révisions Ludiques & Structurées</h2>
-  	            <p className="text-slate-600 text-sm mt-1">Importez le cours : StudySnap filtre les parasites et extrait proprement les définitions.</p>
-  	          </div>
+      <main className="max-w-3xl mx-auto p-4 md:p-6">
+        {/* ACCUEIL */}
+        {activeTab === 'home' && (
+          <div className="space-y-6">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
+              <div className="text-center">
+                <h2 className="text-2xl font-bold text-slate-900">Révisions Ludiques & Structurées</h2>
+                <p className="text-slate-600 text-sm mt-1">Importez le cours : StudySnap extrait les phrases complètes et ajuste l'ordre des cartes.</p>
+              </div>
 
-  	          {/* CLÉ API */}
-  	          <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 space-y-2">
-  	            <div className="flex justify-between items-center">
-  	              <div className="flex items-center space-x-2">
-  	                <Cpu className="w-4 h-4 text-indigo-600" />
-  	                <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Clé API (Optionnelle - Gemini / OpenAI)</span>
-  	              </div>
-  	              {isKeySavedSuccess && <span className="text-xs text-green-600 font-semibold flex items-center space-x-1"><CheckCircle2 className="w-3.5 h-3.5" /> <span>Clé enregistrée !</span></span>}
-  	            </div>
+              {/* CLÉ API */}
+              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 space-y-2">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center space-x-2">
+                    <Cpu className="w-4 h-4 text-indigo-600" />
+                    <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Clé API (Optionnelle - Gemini / OpenAI)</span>
+                  </div>
+                  {isKeySavedSuccess && <span className="text-xs text-green-600 font-semibold flex items-center space-x-1"><CheckCircle2 className="w-3.5 h-3.5" /> <span>Clé enregistrée !</span></span>}
+                </div>
 
-  	            <div className="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-inner">
-  	              <Key className="w-4 h-4 text-slate-400 flex-shrink-0" />
-  	              <input
-  	                type="password"
-  	                value={apiKey}
-  	                onChange={(e) => handleSaveApiKey(e.target.value)}
-  	                placeholder="Collez votre clé Gemini (AIzaSy...) ou laissez vide (moteur local actif)"
-  	                className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400 font-mono"
-  	              />
-  	              <button onClick={() => handleSaveApiKey(apiKey)} className="p-1 text-indigo-600 hover:text-indigo-800" title="Enregistrer">
-  	                <Save className="w-4 h-4" />
-  	              </button>
-  	            </div>
-  	          </div>
+                <div className="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-inner">
+                  <Key className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => handleSaveApiKey(e.target.value)}
+                    placeholder="Collez votre clé Gemini (AIzaSy...) ou laissez vide (moteur local actif)"
+                    className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400 font-mono"
+                  />
+                  <button onClick={() => handleSaveApiKey(apiKey)} className="p-1 text-indigo-600 hover:text-indigo-800" title="Enregistrer">
+                    <Save className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
 
-  	          <div className="space-y-2">
-  	            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">1. Choisir ou créer une matière</label>
-  	            <div className="flex space-x-2">
-  	              <select
-  	                value={selectedSubject}
-  	                onChange={(e) => setSelectedSubject(e.target.value)}
-  	                className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-  	              >
-  	                {subjectList.map((subj, idx) => (
-  	                  <option key={idx} value={subj}>{subj}</option>
-  	                ))}
-  	              </select>
-  	              <input
-  	                type="text"
-  	                value={newSubjectInput}
-  	                onChange={(e) => setNewSubjectInput(e.target.value)}
-  	                placeholder="Nouvelle matière..."
-  	                className="p-2.5 border border-slate-200 rounded-xl text-sm w-36 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-  	              />
-  	              <button onClick={handleAddSubject} className="p-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl">
-  	                <Plus className="w-5 h-5" />
-  	              </button>
-  	            </div>
-  	          </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">1. Choisir ou créer une matière</label>
+                <div className="flex space-x-2">
+                  <select
+                    value={selectedSubject}
+                    onChange={(e) => setSelectedSubject(e.target.value)}
+                    className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    {subjectList.map((subj, idx) => (
+                      <option key={idx} value={subj}>{subj}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    value={newSubjectInput}
+                    onChange={(e) => setNewSubjectInput(e.target.value)}
+                    placeholder="Nouvelle matière..."
+                    className="p-2.5 border border-slate-200 rounded-xl text-sm w-36 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <button onClick={handleAddSubject} className="p-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl">
+                    <Plus className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
 
-  	          <div className="border-t border-slate-100 my-2"></div>
+              <div className="border-t border-slate-100 my-2"></div>
 
-  	          <div className="space-y-2">
-  	            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner le cours (PDF ou Photo)</label>
-  	            {isCameraActive ? (
-  	              <div className="space-y-2 text-center">
-  	                <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
-  	                <div className="flex justify-center space-x-2">
-  	                  <button onClick={capturePhoto} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium flex items-center space-x-1">
-  	                    <Camera className="w-4 h-4" /> <span>Prendre la photo</span>
-  	                  </button>
-  	                  <button onClick={stopCamera} className="bg-slate-300 hover:bg-slate-400 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium">
-  	                    Annuler
-  	                  </button>
-  	                </div>
-  	              </div>
-  	            ) : (
-  	              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-  	                <button onClick={startCamera} className="p-4 border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/50 rounded-xl flex flex-col items-center justify-center transition">
-  	                  <Camera className="w-6 h-6 text-indigo-600 mb-1" />
-  	                  <span className="text-sm font-semibold text-indigo-900">Prendre une photo du cours</span>
-  	                </button>
-  	                <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
-  	                  <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-  	                  <Upload className="w-6 h-6 text-indigo-500 mb-1" />
-  	                  <span className="text-sm font-semibold text-slate-700">Importer le PDF du cours</span>
-  	                </div>
-  	              </div>
-  	            )}
-  	          </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner le cours (PDF ou Photo)</label>
+                {isCameraActive ? (
+                  <div className="space-y-2 text-center">
+                    <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
+                    <div className="flex justify-center space-x-2">
+                      <button onClick={capturePhoto} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium flex items-center space-x-1">
+                        <Camera className="w-4 h-4" /> <span>Prendre la photo</span>
+                      </button>
+                      <button onClick={stopCamera} className="bg-slate-300 hover:bg-slate-400 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium">
+                        Annuler
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button onClick={startCamera} className="p-4 border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/50 rounded-xl flex flex-col items-center justify-center transition">
+                      <Camera className="w-6 h-6 text-indigo-600 mb-1" />
+                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo du cours</span>
+                    </button>
+                    <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
+                      <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                      <Upload className="w-6 h-6 text-indigo-500 mb-1" />
+                      <span className="text-sm font-semibold text-slate-700">Importer le PDF du cours</span>
+                    </div>
+                  </div>
+                )}
+              </div>
 
-  	          <div className="space-y-2">
-  	            <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Aperçu du texte extrait (propre et filtré)</label>
-  	            <textarea
-  	              value={rawInputText}
-  	              onChange={(e) => setRawInputText(e.target.value)}
-  	              placeholder="Le texte propre du cours s'affichera ici..."
-  	              rows={4}
-  	              className="w-full p-3 text-xs font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-  	            />
-  	            <button
-  	              onClick={() => handleProcessText(rawInputText)}
-  	              disabled={!rawInputText.trim() || isAnalyzing}
-  	              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
-  	            >
-  	              <Sparkles className="w-5 h-5 text-amber-300" />
-  	              <span>{isAnalyzing ? (ocrProgress || "Génération des exercices...") : "Générer les exercices & Lancer"}</span>
-  	            </button>
-  	          </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Aperçu du texte extrait</label>
+                <textarea
+                  value={rawInputText}
+                  onChange={(e) => setRawInputText(e.target.value)}
+                  placeholder="Le texte du cours s'affichera ici..."
+                  rows={4}
+                  className="w-full p-3 text-xs font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+                <button
+                  onClick={() => handleProcessText(rawInputText)}
+                  disabled={!rawInputText.trim() || isAnalyzing}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
+                >
+                  <Sparkles className="w-5 h-5 text-amber-300" />
+                  <span>{isAnalyzing ? (ocrProgress || "Génération des exercices...") : "Générer les exercices & Lancer"}</span>
+                </button>
+              </div>
 
-  	          {uploadError && (
-  	            <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm">
-  	              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-  	              <span>{uploadError}</span>
-  	            </div>
-  	          )}
-  	        </div>
-  	      </div>
-  	    )}
+              {uploadError && (
+                <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{uploadError}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-  	    {/* PARCOURS GAMIFIÉ */}
-  	    {activeTab === 'session' && (
-  	      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
-  	        {!isSessionFinished && currentStep ? (
-  	          <div>
-  	            <div className="space-y-3 mb-6">
-  	              <div className="flex justify-between items-center text-sm font-semibold">
-  	                <div className="flex items-center space-x-2">
-  	                  <span className="text-indigo-600 font-bold">Étape {currentStepIdx + 1} / {sessionSteps.length}</span>
-  	                  {combo > 1 && (
-  	                    <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full font-semibold flex items-center space-x-0.5">
-  	                      <Zap className="w-3 h-3" />
-  	                      <span>Combo x{combo}</span>
-  	                    </span>
-  	                  )}
-  	                </div>
-  	                <div className="flex items-center space-x-4">
-  	                  <div className="flex space-x-1 text-red-500">
-  	                    {Array.from({ length: 3 }).map((_, i) => (
-  	                      <Heart
-  	                        key={i}
-  	                        className={`w-4 h-4 ${i < lives ? 'fill-current text-red-500' : 'text-slate-200'}`}
-  	                      />
-  	                    ))}
-  	                  </div>
-  	                  <div className="text-sm font-semibold text-slate-700">
-  	                    Score: <span className="text-indigo-600">{score}</span>
-  	                  </div>
-  	                  {currentStep.type !== 'flashcard' && (
-  	                    <div className={`flex items-center space-x-1 text-xs font-bold ${timeLeft <= 5 ? 'text-red-600 animate-pulse' : 'text-slate-600'}`}>
-  	                      <Timer className="w-4 h-4" />
-  	                      <span>{timeLeft}s</span>
-  	                    </div>
-  	                  )}
-  	                </div>
-  	              </div>
-  	              
-  	              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-  	                <div
-  	                  className="bg-indigo-600 h-full transition-all duration-300"
-  	                  style={{ width: `${((currentStepIdx + 1) / sessionSteps.length) * 100}%` }}
-  	                />
-  	              </div>
-  	            </div>
+        {/* PARCOURS GAMIFIÉ */}
+        {activeTab === 'session' && (
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
+            {!isSessionFinished && currentStep ? (
+              <div>
+                <div className="space-y-3 mb-6">
+                  <div className="flex justify-between items-center text-sm font-semibold">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-indigo-600 font-bold">Étape {currentStepIdx + 1} / {sessionSteps.length}</span>
+                      {combo > 1 && (
+                        <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full font-semibold flex items-center space-x-0.5">
+                          <Zap className="w-3 h-3" />
+                          <span>Combo x{combo}</span>
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-4">
+                      <div className="flex space-x-1 text-red-500">
+                        {Array.from({ length: 3 }).map((_, i) => (
+                          <Heart
+                            key={i}
+                            className={`w-4 h-4 ${i < lives ? 'fill-current text-red-500' : 'text-slate-200'}`}
+                          />
+                        ))}
+                      </div>
+                      <div className="text-sm font-semibold text-slate-700">
+                        Score: <span className="text-indigo-600">{score}</span>
+                      </div>
+                      {currentStep.type !== 'flashcard' && (
+                        <div className={`flex items-center space-x-1 text-xs font-bold ${timeLeft <= 5 ? 'text-red-600 animate-pulse' : 'text-slate-600'}`}>
+                          <Timer className="w-4 h-4" />
+                          <span>{timeLeft}s</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-indigo-600 h-full transition-all duration-300"
+                      style={{ width: `${((currentStepIdx + 1) / sessionSteps.length) * 100}%` }}
+                    />
+                  </div>
+                </div>
 
-  	            {/* Flashcard */}
-  	            {currentStep.type === 'flashcard' && (
-  	              <div className="space-y-6 text-center">
-  	                <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-  	                  <span>Carte Mémoire</span>
-  	                  <span>Recto / Verso</span>
-  	                </div>
+                {/* Flashcard (Recto = Définition complète, Verso = Mot clé) */}
+                {currentStep.type === 'flashcard' && (
+                  <div className="space-y-6 text-center">
+                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      <span>Carte Mémoire</span>
+                      <span>Recto (Définition) / Verso (Mot-clé)</span>
+                    </div>
 
-  	                <div
-  	                  onClick={() => setIsCardFlipped(!isCardFlipped)}
-  	                  className={`w-full min-h-[220px] p-6 rounded-2xl border-2 cursor-pointer transition-all duration-300 flex flex-col items-center justify-center relative shadow-sm ${
-  	                    isCardFlipped ? 'bg-indigo-50 border-indigo-300' : 'bg-white border-slate-200 hover:border-slate-300'
-  	                  }`}
-  	                >
-  	                  <span className="absolute top-4 left-4 text-xs font-medium text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-lg">
-  	                    {isCardFlipped ? 'Définition (Verso)' : 'Notion (Recto)'}
-  	                  </span>
-  	                  <button
-  	                    onClick={(e) => {
-  	                      e.stopPropagation();
-  	                      speakText(isCardFlipped ? currentStep.data.back : currentStep.data.front);
-  	                    }}
-  	                    className="absolute top-4 right-4 p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition"
-  	                    title="Écouter"
-  	                  >
-  	                    <Volume2 className="w-4 h-4" />
-  	                  </button>
+                    <div
+                      onClick={() => setIsCardFlipped(!isCardFlipped)}
+                      className={`w-full min-h-[220px] p-6 rounded-2xl border-2 cursor-pointer transition-all duration-300 flex flex-col items-center justify-center relative shadow-sm ${
+                        isCardFlipped ? 'bg-indigo-50 border-indigo-300' : 'bg-white border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <span className="absolute top-4 left-4 text-xs font-medium text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-lg">
+                        {isCardFlipped ? 'Mot-clé / Concept (Verso)' : 'Définition à deviner (Recto)'}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          speakText(isCardFlipped ? currentStep.data.back : currentStep.data.front);
+                        }}
+                        className="absolute top-4 right-4 p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition"
+                        title="Écouter"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
 
-  	                  <div className="my-6 max-w-md">
-  	                    <h3 className={`font-bold transition-all ${isCardFlipped ? 'text-base text-slate-800 font-normal' : 'text-2xl text-slate-900'}`}>
-  	                      {isCardFlipped ? currentStep.data.back : currentStep.data.front}
-  	                    </h3>
-  	                  </div>
+                      <div className="my-6 max-w-md">
+                        <h3 className={`font-bold transition-all ${isCardFlipped ? 'text-2xl text-indigo-900 font-bold' : 'text-base text-slate-800 font-medium'}`}>
+                          {isCardFlipped ? currentStep.data.back : currentStep.data.front}
+                        </h3>
+                      </div>
 
-  	                  <p className="text-xs text-slate-400 italic">Cliquez sur la carte pour retourner</p>
-  	                </div>
+                      <p className="text-xs text-slate-400 italic">Cliquez sur la carte pour révéler la réponse</p>
+                    </div>
 
-  	                <button
-  	                  onClick={advanceToNextStep}
-  	                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition shadow-sm flex items-center justify-center space-x-2"
-  	                >
-  	                  <span>Carte suivante</span>
-  	                  <ChevronRight className="w-4 h-4" />
-  	                </button>
-  	              </div>
-  	            )}
+                    <button
+                      onClick={advanceToNextStep}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition shadow-sm flex items-center justify-center space-x-2"
+                    >
+                      <span>Carte suivante</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
 
-  	            {/* Quiz QCM */}
-  	            {currentStep.type === 'quiz' && (
-  	              <div className="space-y-6">
-  	                <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-  	                  <span>Question du Cours</span>
-  	                </div>
+                {/* Quiz QCM */}
+                {currentStep.type === 'quiz' && (
+                  <div className="space-y-6">
+                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      <span>Question du Cours</span>
+                    </div>
 
-  	                <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-  	                  <h3 className="text-lg font-bold text-slate-900">{currentStep.data.question}</h3>
-  	                </div>
+                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                      <h3 className="text-lg font-bold text-slate-900">{currentStep.data.question}</h3>
+                    </div>
 
-  	                <div className="space-y-3">
-  	                  {currentStep.data.options.map((option, idx) => {
-  	                    let btnStyle = "bg-white border-slate-200 text-slate-800 hover:border-indigo-400";
-  	                    if (selectedAnswer !== null) {
-  	                      if (idx === currentStep.data.correctAnswer) {
-  	                        btnStyle = "bg-green-50 border-green-500 text-green-900 font-semibold";
-  	                      } else if (idx === selectedAnswer) {
-  	                        btnStyle = "bg-red-50 border-red-500 text-red-900";
-  	                      } else {
-  	                        btnStyle = "opacity-50 bg-white border-slate-200 text-slate-500";
-  	                      }
-  	                    }
+                    <div className="space-y-3">
+                      {currentStep.data.options.map((option, idx) => {
+                        let btnStyle = "bg-white border-slate-200 text-slate-800 hover:border-indigo-400";
+                        if (selectedAnswer !== null) {
+                          if (idx === currentStep.data.correctAnswer) {
+                            btnStyle = "bg-green-50 border-green-500 text-green-900 font-semibold";
+                          } else if (idx === selectedAnswer) {
+                            btnStyle = "bg-red-50 border-red-500 text-red-900";
+                          } else {
+                            btnStyle = "opacity-50 bg-white border-slate-200 text-slate-500";
+                          }
+                        }
 
-  	                    return (
-  	                      <button
-  	                        key={idx}
-  	                        onClick={() => handleAnswerSelect(idx)}
-  	                        disabled={selectedAnswer !== null}
-  	                        className={`w-full p-4 rounded-xl border-2 text-left transition flex justify-between items-center ${btnStyle}`}
-  	                      >
-  	                        <span className="text-sm">{option}</span>
-  	                        {selectedAnswer !== null && idx === currentStep.data.correctAnswer && (
-  	                          <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
-  	                        )}
-  	                        {selectedAnswer !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && (
-  	                          <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-  	                        )}
-  	                      </button>
-  	                    );
-  	                  })}
-  	                </div>
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => handleAnswerSelect(idx)}
+                            disabled={selectedAnswer !== null}
+                            className={`w-full p-4 rounded-xl border-2 text-left transition flex justify-between items-center ${btnStyle}`}
+                          >
+                            <span className="text-sm">{option}</span>
+                            {selectedAnswer !== null && idx === currentStep.data.correctAnswer && (
+                              <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
+                            )}
+                            {selectedAnswer !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && (
+                              <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
 
-  	                {stepResultState !== null && (
-  	                  <div className="space-y-4 pt-2 animate-fade-in">
-  	                    <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-  	                      <p className="font-semibold mb-1">{stepResultState === 'correct' ? '✨ Bonne réponse !' : '❌ Pas tout à fait.'}</p>
-  	                      <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
-  	                    </div>
-  	                    <button
-  	                      onClick={advanceToNextStep}
-  	                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
-  	                    >
-  	                      <span>Étape suivante</span>
-  	                      <ChevronRight className="w-4 h-4" />
-  	                    </button>
-  	                  </div>
-  	                )}
-  	              </div>
-  	            )}
+                    {stepResultState !== null && (
+                      <div className="space-y-4 pt-2 animate-fade-in">
+                        <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                          <p className="font-semibold mb-1">{stepResultState === 'correct' ? '✨ Bonne réponse !' : '❌ Pas tout à fait.'}</p>
+                          <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
+                        </div>
+                        <button
+                          onClick={advanceToNextStep}
+                          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
+                        >
+                          <span>Étape suivante</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
 
-  	            {/* Texte à trous */}
-  	            {currentStep.type === 'fillblank' && (
-  	              <div className="space-y-6">
-  	                <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-  	                  <span>Texte à Trous</span>
-  	                </div>
+                {/* Texte à trous */}
+                {currentStep.type === 'fillblank' && (
+                  <div className="space-y-6">
+                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      <span>Texte à Trous</span>
+                    </div>
 
-  	                <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-  	                  <h3 className="text-lg font-medium text-slate-900">
-  	                    {currentStep.data.sentenceWithBlank}
-  	                  </h3>
-  	                </div>
+                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                      <h3 className="text-lg font-medium text-slate-900">
+                        {currentStep.data.sentenceWithBlank}
+                      </h3>
+                    </div>
 
-  	                <div className="space-y-3">
-  	                  <input
-  	                    type="text"
-  	                    value={userBlankInput}
-  	                    onChange={(e) => setUserBlankInput(e.target.value)}
-  	                    disabled={stepResultState !== null}
-  	                    placeholder="Écrivez le mot manquant..."
-  	                    className="w-full p-4 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-  	                    onKeyDown={(e) => {
-  	                      if (e.key === 'Enter' && stepResultState === null) {
-  	                        handleCheckFillBlank();
-  	                      }
-  	                    }}
-  	                  />
-  	                  {stepResultState === null ? (
-  	                    <button
-  	                      onClick={handleCheckFillBlank}
-  	                      disabled={!userBlankInput.trim()}
-  	                      className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition shadow-sm"
-  	                    >
-  	                      Vérifier
-  	                    </button>
-  	                  ) : (
-  	                    <div className="space-y-4 animate-fade-in">
-  	                      <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-  	                        <p className="font-semibold mb-1">
-  	                          {stepResultState === 'correct' ? '✨ C\'est exact !' : `❌ Le mot attendu était : "${currentStep.data.missingWord}"`}
-  	                        </p>
-  	                        <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
-  	                      </div>
-  	                      <button
-  	                        onClick={advanceToNextStep}
-  	                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
-  	                      >
-  	                        <span>Étape suivante</span>
-  	                        <ChevronRight className="w-4 h-4" />
-  	                      </button>
-  	                    </div>
-  	                  )}
-  	                </div>
-  	              </div>
-  	            )}
-  	          </div>
-  	        ) : (
-  	          <div className="text-center space-y-6 py-8">
-  	            <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto text-amber-600">
-  	              <Award className="w-10 h-10" />
-  	            </div>
-  	            <div className="space-y-2">
-  	              <h2 className="text-2xl font-bold text-slate-900">Session Terminée ! 🎉</h2>
-  	              <p className="text-sm text-slate-600">Bravo pour tes efforts de révision !</p>
-  	            </div>
+                    <div className="space-y-3">
+                      <input
+                        type="text"
+                        value={userBlankInput}
+                        onChange={(e) => setUserBlankInput(e.target.value)}
+                        disabled={stepResultState !== null}
+                        placeholder="Écrivez le mot manquant..."
+                        className="w-full p-4 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && stepResultState === null) {
+                            handleCheckFillBlank();
+                          }
+                        }}
+                      />
+                      {stepResultState === null ? (
+                        <button
+                          onClick={handleCheckFillBlank}
+                          disabled={!userBlankInput.trim()}
+                          className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition shadow-sm"
+                        >
+                          Vérifier
+                        </button>
+                      ) : (
+                        <div className="space-y-4 animate-fade-in">
+                          <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                            <p className="font-semibold mb-1">
+                              {stepResultState === 'correct' ? '✨ C\'est exact !' : `❌ Le mot attendu était : "${currentStep.data.missingWord}"`}
+                            </p>
+                            <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
+                          </div>
+                          <button
+                            onClick={advanceToNextStep}
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
+                          >
+                            <span>Étape suivante</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center space-y-6 py-8">
+                <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto text-amber-600">
+                  <Award className="w-10 h-10" />
+                </div>
+                <div className="space-y-2">
+                  <h2 className="text-2xl font-bold text-slate-900">Session Terminée ! 🎉</h2>
+                  <p className="text-sm text-slate-600">Bravo pour tes efforts de révision !</p>
+                </div>
 
-  	            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-sm mx-auto space-y-3">
-  	              <div className="flex justify-between text-sm">
-  	                <span className="text-slate-600">Score final :</span>
-  	                <span className="font-bold text-indigo-600">{score} pts</span>
-  	              </div>
-  	              <div className="flex justify-between text-sm">
-  	                <span className="text-slate-600">Matière :</span>
-  	                <span className="font-bold text-slate-800">{selectedSubject}</span>
-  	              </div>
-  	            </div>
+                <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-sm mx-auto space-y-3">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-600">Score final :</span>
+                    <span className="font-bold text-indigo-600">{score} pts</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-600">Matière :</span>
+                    <span className="font-bold text-slate-800">{selectedSubject}</span>
+                  </div>
+                </div>
 
-  	            <div className="flex justify-center space-x-3">
-  	              <button
-  	                onClick={() => startSession()}
-  	                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition flex items-center space-x-2 shadow-sm"
-  	              >
-  	                <RotateCw className="w-4 h-4" />
-  	                <span>Recommencer</span>
-  	              </button>
-  	              <button
-  	                onClick={() => setActiveTab('home')}
-  	                className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-6 py-3 rounded-xl text-sm font-medium transition"
-  	              >
-  	                Accueil
-  	              </button>
-  	            </div>
-  	          </div>
-  	        )}
-  	      </div>
-  	    )}
+                <div className="flex justify-center space-x-3">
+                  <button
+                    onClick={() => startSession()}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition flex items-center space-x-2 shadow-sm"
+                  >
+                    <RotateCw className="w-4 h-4" />
+                    <span>Recommencer</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('home')}
+                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-6 py-3 rounded-xl text-sm font-medium transition"
+                  >
+                    Accueil
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
-  	    {/* MES DECKS */}
-  	    {activeTab === 'decks' && (
-  	      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
-  	        <div className="flex justify-between items-center">
-  	          <h2 className="text-xl font-bold text-slate-900">Mes Decks de Cours Enregistrés</h2>
-  	          <span className="text-xs bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg font-semibold">
-  	            {savedDecks.length} deck(s)
-  	          </span>
-  	        </div>
+        {/* MES DECKS */}
+        {activeTab === 'decks' && (
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-bold text-slate-900">Mes Decks de Cours Enregistrés</h2>
+              <span className="text-xs bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg font-semibold">
+                {savedDecks.length} deck(s)
+              </span>
+            </div>
 
-  	        {savedDecks.length === 0 ? (
-  	          <div className="text-center py-12 text-slate-400 space-y-2">
-  	            <Folder className="w-12 h-12 mx-auto opacity-40" />
-  	            <p className="text-sm">Aucun deck enregistré pour le moment.</p>
-  	          </div>
-  	        ) : (
-  	          <div className="space-y-3">
-  	            {savedDecks.map((deck) => (
-  	              <div key={deck.id} className="p-4 rounded-xl border border-slate-200 hover:border-indigo-300 transition flex justify-between items-center bg-slate-50/50">
-  	                <div className="space-y-1">
-  	                  <div className="flex items-center space-x-2">
-  	                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-medium">{deck.subject}</span>
-  	                    <span className="text-xs text-slate-400">{deck.date}</span>
-  	                  </div>
-  	                  <h3 className="text-sm font-bold text-slate-800">{deck.title}</h3>
-  	                </div>
-  	                <div className="flex items-center space-x-2">
-  	                  <button
-  	                    onClick={() => handleLoadDeck(deck)}
-  	                    className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium flex items-center space-x-1"
-  	                    title="Lancer"
-  	                  >
-  	                    <Play className="w-3.5 h-3.5" />
-  	                  </button>
-  	                  <button
-  	                    onClick={() => handleDeleteDeck(deck.id)}
-  	                    className="p-2 bg-slate-200 hover:bg-red-100 text-slate-600 hover:text-red-600 rounded-xl transition"
-  	                    title="Supprimer"
-  	                  >
-  	                    <Trash2 className="w-3.5 h-3.5" />
-  	                  </button>
-  	                </div>
-  	              </div>
-  	            ))}
-  	          </div>
-  	        )}
-  	      </div>
-  	    )}
-  	  </main>
-  	</div>
+            {savedDecks.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 space-y-2">
+                <Folder className="w-12 h-12 mx-auto opacity-40" />
+                <p className="text-sm">Aucun deck enregistré pour le moment.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {savedDecks.map((deck) => (
+                  <div key={deck.id} className="p-4 rounded-xl border border-slate-200 hover:border-indigo-300 transition flex justify-between items-center bg-slate-50/50">
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-medium">{deck.subject}</span>
+                        <span className="text-xs text-slate-400">{deck.date}</span>
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-800">{deck.title}</h3>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => handleLoadDeck(deck)}
+                        className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium flex items-center space-x-1"
+                        title="Lancer"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteDeck(deck.id)}
+                        className="p-2 bg-slate-200 hover:bg-red-100 text-slate-600 hover:text-red-600 rounded-xl transition"
+                        title="Supprimer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
   );
 }
