@@ -14,7 +14,7 @@ const speakText = (text) => {
   }
 };
 
-// --- NETTOYAGE UNIFIÉ ET ROBUSTE (MOBILE & PC) ---
+// --- NETTOYAGE ET RECONSTITUTION DES PHRASES (MOBILE & PC) ---
 function cleanAndStructureRawText(rawText) {
   if (!rawText) return '';
 
@@ -59,130 +59,82 @@ function cleanAndStructureRawText(rawText) {
   return cleanedLines.join('\n\n');
 }
 
-// --- EXTRACTION LOCALE ULTRA-INTELLIGENTE (DÉTECTION DE CONCEPTS) ---
-function extractAllDefinitionsFromText(sourceText) {
-  const cleanedText = cleanAndStructureRawText(sourceText);
-  const rawSentences = cleanedText.split(/(?<=[.!?])\s+|\n+/).filter(s => s.trim().length > 15);
-  const concepts = [];
+// --- ANALYSE ET GÉNÉRATION PAR L'IA GEMINI ---
+async function generateExercisesWithExternalAI(sourceText, apiKey) {
+  const cleanKey = apiKey.trim();
+  const structuredText = cleanAndStructureRawText(sourceText);
 
-  rawSentences.forEach((sentence) => {
-    const cleanS = sentence.trim();
-    
-    // 1. Format explicite "Terme : Définition"
-    const colonMatch = cleanS.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,40})\s*[:–—]\s*(.{15,})$/);
-    if (colonMatch) {
-      let term = colonMatch[1].trim();
-      let def = colonMatch[2].trim();
-      if (!/[.!?]$/.test(def)) def += '.';
-      term = term.charAt(0).toUpperCase() + term.slice(1);
-      def = def.charAt(0).toUpperCase() + def.slice(1);
-      if (!concepts.some(c => c.term.toLowerCase() === term.toLowerCase())) {
-        concepts.push({ term, def, source: cleanS });
-      }
-      return;
+  const promptText = `
+Tu es un professeur expert en pédagogie. Analyse le cours fourni ci-dessous en profondeur, comprends les notions clés abordées, et génère un jeu de révision complet et fidèle au format JSON STRICT.
+RÈGLE ABSOLUE : Ne coupe jamais les phrases au milieu. Les définitions et explications doivent être ENTIÈRES et COMPLÈTES jusqu'au point final.
+
+CONSIGNES DE FORMATAGE :
+1. "questions" : Crée 5 QCM basés strictement sur le contenu du cours :
+   - 'question' : Une question claire commençant par un mot interrogatif ("Qui", "Que", "Quoi", "Comment", "Pourquoi") et finissant par "?".
+   - 'options' : 4 réponses (1 bonne réponse exacte tirée du cours + 3 fausses propositions crédibles). Chaque option commence par une majuscule et finit par ".".
+   - 'correctAnswer' : l'index (0, 1, 2 ou 3).
+   - 'explanation' : Une explication pédagogique complète finissant par ".".
+2. "flashcards" : Crée 5 cartes mémoires :
+   - 'front' : LA NOTION OU LA DÉFINITION COMPLÈTE DU COURS.
+   - 'back' : LE CONCEPT OU LE MOT-CLÉ ASSOCIÉ.
+3. "fillBlanks" : 3 phrases à trous portant sur des termes clés du cours.
+
+TEXTE DU COURS :
+"""${structuredText.slice(0, 6000)}"""
+
+Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'introduction, AUCUNE balise markdown extra) :
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "Que nous apprend le cours sur... ?",
+      "options": ["Proposition 1.", "Proposition 2.", "Proposition 3.", "Proposition 4."],
+      "correctAnswer": 0,
+      "explanation": "Explication complète."
     }
-
-    // 2. Extraction intelligente des sujets et noms propres (mots avec majuscules ou termes importants)
-    const wordsMatch = cleanS.match(/(?:[A-ZÀ-ÖØ][a-zà-öø-ÿ]+)(?:\s+[A-ZÀ-ÖØ][a-zà-öø-ÿ]+)*/g);
-    let term = wordsMatch && wordsMatch.length > 0 ? wordsMatch[0] : '';
-    
-    // Si le premier mot est un pronom ou article, on prend le suivant s'il existe
-    if (['C', 'La', 'Le', 'Les', 'Un', 'Une', 'Des', 'Il', 'Elle', 'En'].includes(term) && wordsMatch && wordsMatch.length > 1) {
-      term = wordsMatch[1];
-    }
-
-    // Fallback : si aucun nom propre n'est trouvé, on prend les 3 premiers mots significatifs
-    if (!term || term.length < 3) {
-      const words = cleanS.split(' ').filter(w => w.length > 3);
-      term = words.slice(0, 2).join(' ') || "Notion clé";
-    }
-
-    if (!concepts.some(c => c.def === cleanS)) {
-      concepts.push({
-        term: term,
-        def: cleanS,
-        source: cleanS
-      });
-    }
-  });
-
-  return concepts;
+  ],
+  "flashcards": [
+    { "id": 1, "front": "Définition complète.", "back": "Concept" }
+  ],
+  "fillBlanks": [
+    { "id": 1, "sentenceWithBlank": "La notion de [___] permet...", "missingWord": "Mot", "explanation": "Explication." }
+  ]
 }
+`;
 
-// --- MOTEUR LOCAL INTELLIGENT DE GÉNÉRATION FIDÈLE AU COURS ---
-function generateAllExercisesLocal(sourceText) {
-  const allDefs = extractAllDefinitionsFromText(sourceText);
-  const shuffledDefs = [...allDefs].sort(() => Math.random() - 0.5);
+  const modelsToTry = ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-latest'];
+  let response = null;
+  let lastError = '';
 
-  const generatedQuestions = [];
-  const generatedFlashcards = [];
-  const generatedFillBlanks = [];
-
-  shuffledDefs.forEach((pair, index) => {
-    // Flashcard avec le vrai concept extrait
-    generatedFlashcards.push({
-      id: index + 1,
-      front: pair.def,
-      back: pair.term
-    });
-
-    // Texte à trous basé sur le concept
-    const sentenceWithBlank = pair.source.replace(new RegExp(`\\b${pair.term}\\b`, 'gi'), '[___]');
-    if (sentenceWithBlank !== pair.source) {
-      generatedFillBlanks.push({
-        id: index + 1,
-        sentenceWithBlank,
-        missingWord: pair.term,
-        explanation: pair.source
+  for (const modelName of modelsToTry) {
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`;
+    try {
+      response = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        })
       });
-    } else {
-      generatedFillBlanks.push({
-        id: index + 1,
-        sentenceWithBlank: pair.source.replace(new RegExp(`\\b${pair.source.split(' ')[0]}\\b`, 'gi'), '[___]'),
-        missingWord: pair.source.split(' ')[0],
-        explanation: pair.source
-      });
-    }
-
-    // QCM contextuel
-    const correctText = pair.def;
-    const otherDefs = shuffledDefs.filter(p => p.term !== pair.term).map(p => p.def);
-    
-    let wrongOptions = [];
-    while (wrongOptions.length < 3 && otherDefs.length > 0) {
-      const randIdx = Math.floor(Math.random() * otherDefs.length);
-      const selectedWrong = otherDefs.splice(randIdx, 1)[0];
-      if (!wrongOptions.includes(selectedWrong) && selectedWrong !== correctText) {
-        wrongOptions.push(selectedWrong);
+      if (response.ok) break;
+      else {
+        const errData = await response.json();
+        lastError = errData.error?.message || `Erreur HTTP ${response.status}`;
       }
+    } catch (e) {
+      lastError = e.message;
     }
+  }
 
-    const fallbacks = [
-      `Une information non mentionnée dans ce chapitre du cours.`,
-      `Un élément contradictoire avec l'analyse du document.`,
-      `Une notion hors du contexte de la leçon étudiée.`
-    ];
-    while (wrongOptions.length < 3) {
-      const fb = fallbacks[wrongOptions.length];
-      if (!wrongOptions.includes(fb)) wrongOptions.push(fb);
-    }
+  if (!response || !response.ok) {
+    throw new Error(`Échec de l'IA Gemini : ${lastError}`);
+  }
 
-    const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
-
-    generatedQuestions.push({
-      id: index + 1,
-      question: `Que nous apprend le cours concernant : « ${pair.term} » ?`,
-      options: allOptions,
-      correctAnswer: allOptions.indexOf(correctText),
-      explanation: pair.source
-    });
-  });
-
-  return {
-    questions: generatedQuestions.length > 0 ? generatedQuestions : [{ id: 1, question: "Le texte est-il suffisant ?", options: ["Oui.", "Non.", "Peut-être.", "Inconnu."], correctAnswer: 0, explanation: "Veuillez fournir un texte plus riche." }],
-    flashcards: generatedFlashcards.length > 0 ? generatedFlashcards : [{ id: 1, front: "Notion principale", back: "Concept" }],
-    fillBlanks: generatedFillBlanks.length > 0 ? generatedFillBlanks : [{ id: 1, sentenceWithBlank: "Le cours traite de [___].", missingWord: "sujets", explanation: "Analyse globale." }]
-  };
+  const data = await response.json();
+  const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const jsonContent = rawContent.replace(/```json/gi, '').replace(/```/g, '').trim();
+  return JSON.parse(jsonContent);
 }
 
 function buildSessionSteps(questions, flashcards, fillBlanks) {
@@ -414,12 +366,18 @@ export default function App() {
       setUploadError("Le texte du cours est trop court ou vide.");
       return;
     }
+
+    if (!apiKey || apiKey.trim().length < 5) {
+      setUploadError("Veuillez renseigner votre clé API Gemini dans l'onglet Paramètres pour que l'IA analyse votre cours.");
+      setActiveTab('settings');
+      return;
+    }
+
     setIsAnalyzing(true);
-    setOcrProgress("Analyse intelligente du cours en cours...");
+    setOcrProgress("L'IA Gemini analyse votre cours...");
 
     try {
-      // Analyse locale directe et ultra-rapide adaptée aux mobiles
-      const generated = generateAllExercisesLocal(cleanedText);
+      const generated = await generateExercisesWithExternalAI(cleanedText, apiKey);
 
       setQuestions(generated.questions || []);
       setFlashcards(generated.flashcards || []);
@@ -438,7 +396,7 @@ export default function App() {
       startSession(generated.questions, generated.flashcards, generated.fillBlanks);
     } catch (e) {
       console.error(e);
-      setUploadError("Une erreur est survenue lors de l'analyse.");
+      setUploadError(e.message || "Erreur lors de l'analyse par l'IA.");
       setIsAnalyzing(false);
       setOcrProgress('');
     }
@@ -605,7 +563,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.8</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.9 (IA Active)</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -628,8 +586,8 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Mobile & PC</h2>
-                <p className="text-slate-600 text-sm mt-1">Importez votre cours, vérifiez le texte, puis lancez la génération à votre rythme.</p>
+                <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique par IA</h2>
+                <p className="text-slate-600 text-sm mt-1">Importez votre cours, vérifiez le texte, et laissez l'intelligence artificielle générer votre quiz sur mesure.</p>
               </div>
 
               <div className="space-y-2">
@@ -689,18 +647,18 @@ export default function App() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Coller le texte du cours (optionnel)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Coller le texte du cours</label>
                 <textarea
                   rows="6"
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Ou collez directement le contenu brut de votre leçon ici..."
+                  placeholder="Ou collez directement le contenu de votre leçon ici..."
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
                 ></textarea>
                 <div className="flex flex-wrap gap-2 justify-between items-center">
                   <div className="flex space-x-2">
                     <button onClick={handleCleanTextButton} className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-medium flex items-center space-x-1">
-                      <Wand2 className="w-3.5 h-3.5" /> <span>Nettoyer le texte</span>
+                      <Wand2 className="w-3.5 h-3.5" /> <span>Nettoyer</span>
                     </button>
                     <button onClick={handleClearText} className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg text-xs font-medium flex items-center space-x-1">
                       <Trash2 className="w-3.5 h-3.5" /> <span>Effacer</span>
@@ -714,12 +672,12 @@ export default function App() {
                     {isAnalyzing ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>{ocrProgress || "Analyse en cours..."}</span>
+                        <span>{ocrProgress || "Analyse par l'IA..."}</span>
                       </>
                     ) : (
                       <>
                         <Zap className="w-4 h-4" />
-                        <span>Générer les exercices & Réviser</span>
+                        <span>Générer avec l'IA & Réviser</span>
                       </>
                     )}
                   </button>
@@ -790,7 +748,7 @@ export default function App() {
                       className="w-full min-h-[220px] p-6 bg-gradient-to-br from-indigo-500 to-indigo-700 text-white rounded-2xl shadow-md flex flex-col justify-between cursor-pointer transition transform hover:scale-[1.01]"
                     >
                       <div className="flex justify-between items-center text-indigo-200 text-xs font-semibold">
-                        <span>CARTE MÉMOIRE</span>
+                        <span>CARTE MÉMOIRE (GÉNÉRÉE PAR L'IA)</span>
                         <button onClick={(e) => { e.stopPropagation(); speakText(isCardFlipped ? currentStep.data.back : currentStep.data.front); }} className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg">
                           <Volume2 className="w-4 h-4 text-white" />
                         </button>
@@ -999,8 +957,27 @@ export default function App() {
         {activeTab === 'settings' && (
           <div className="space-y-4">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
-              <h3 className="text-xl font-bold text-slate-900">Paramètres de l'application</h3>
-              <p className="text-slate-600 text-sm">StudySnap utilise désormais une analyse intelligente locale ultra-rapide qui comprend vos cours et extrait les vrais concepts directement sur votre smartphone sans blocage réseau.</p>
+              <h3 className="text-xl font-bold text-slate-900">Paramètres & Clé API Gemini</h3>
+              <p className="text-slate-600 text-sm">L'application nécessite une clé API Gemini active pour que l'intelligence artificielle analyse vos leçons et génère les exercices.</p>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Votre clé API Gemini (AIzaSy...)</label>
+                <div className="flex space-x-2">
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="Collez votre clé API ici..."
+                    className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  />
+                  <button onClick={() => handleSaveApiKey(apiKey)} className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center space-x-1">
+                    <Save className="w-4 h-4" /> <span>Enregistrer</span>
+                  </button>
+                </div>
+                {isKeySavedSuccess && (
+                  <p className="text-xs text-green-600 font-semibold">Clé API enregistrée avec succès !</p>
+                )}
+              </div>
             </div>
           </div>
         )}
