@@ -22,24 +22,24 @@ const speakText = (text) => {
   }
 };
 
-// --- APPEL OPTIMISÉ POUR IA GEMINI / OPENAI ---
+// --- APPEL OPTIMISÉ POUR IA GEMINI / OPENAI (AVEC DÉTECTION DE DÉFINITIONS) ---
 async function generateExercisesWithExternalAI(sourceText, apiKey) {
   const cleanKey = apiKey.trim();
   const isGeminiKey = cleanKey.startsWith('AIza') || !cleanKey.startsWith('sk-');
 
   const promptText = `
-Tu es un professeur expert. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
+Tu es un professeur d'histoire-géo et expert pédagogique bienveillant. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
 
 CONSIGNES STRICTES :
-1. "questions" : Crée 5 QCM de niveau universitaire/lycée. Pour chaque question :
-   - 'question' : pose une vraie question de réflexion sur le fond du cours.
-   - 'options' : 4 réponses crédibles et élaborées (1 bonne + 3 faux pièges très réalistes tirés du contexte).
+1. "questions" : Crée 5 QCM de niveau collège/lycée. Pour chaque question :
+   - 'question' : Pose une vraie question précise sur le cours. Si le texte contient des définitions explicites (ex: "Les Lumières : ensemble d'idées..."), pose impérativement la question sous la forme "Qu'est-ce que [le terme] ?" (ex: "Qu'est-ce que les Lumières ?").
+   - 'options' : 4 réponses crédibles et élaborées (1 bonne définition exacte + 3 faux pièges très réalistes tirés d'autres notions du cours).
    - 'correctAnswer' : l'index (0, 1, 2 ou 3) de la bonne réponse.
-   - 'explanation' : une explication claire.
-2. "flashcards" : Crée 5 cartes mémoires. 
-   - 'front' : SEULEMENT le nom du concept, terme ou mot-clé (2 à 5 mots maximum). NE METS PAS la réponse sur le recto !
-   - 'back' : La définition complète ou explication de ce concept.
-3. "fillBlanks" : 3 à 5 phrases à trous portant sur des termes techniques essentiels.
+   - 'explanation' : une explication claire rappelant le contexte du cours.
+2. "flashcards" : Crée 5 cartes mémoires basées sur les concepts clés et définitions. 
+   - 'front' : SEULEMENT le nom du concept, terme ou mot-clé (2 à 5 mots maximum, ex: "Les Lumières", "Monarchie absolue"). NE METS PAS la réponse sur le recto !
+   - 'back' : La définition complète ou explication détaillée de ce concept tirée du cours.
+3. "fillBlanks" : 3 à 5 phrases à trous portant sur des termes techniques essentiels du cours.
 
 TEXTE DU COURS :
 """${sourceText.slice(0, 5000)}"""
@@ -49,7 +49,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   "questions": [
     {
       "id": 1,
-      "question": "Quelle est la caractéristique principale de... ?",
+      "question": "Qu'est-ce que... ?",
       "options": ["Bonne réponse", "Mauvaise réponse 1 plausible", "Mauvaise réponse 2 plausible", "Mauvaise réponse 3 plausible"],
       "correctAnswer": 0,
       "explanation": "Explication basée sur le cours."
@@ -119,36 +119,55 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL DE SECOURS (SÉMANTIQUE NETTOYÉE) ---
+// --- MOTEUR LOCAL DE SECOURS AMÉLIORÉ (DÉTECTION DE DÉFINITIONS "TERME : DÉFINITION") ---
 function semanticParagraphAnalysis(sourceText) {
   if (!sourceText) return [];
 
-  const rawBlocks = sourceText
-    .split(/\n\s*\n|(?<=[.!?])\s+/)
-    .map((b) => b.replace(/^[-•*0-9.]+\s*/, '').trim())
-    .filter((b) => b.length > 30);
-
+  const lines = sourceText.split('\n');
   const semanticPairs = [];
 
-  rawBlocks.forEach((block) => {
-    const sentences = block.split(/(?<=[.!?])\s+/);
-    if (sentences.length === 0) return;
-
-    const mainSentence = sentences[0];
-    const words = mainSentence.replace(/[,;:!?()]/g, '').split(/\s+/);
-    const keyWords = words.filter(w => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()));
-    
-    // Titre/Concept très court pour le recto
-    const concept = keyWords.length > 0 ? keyWords.slice(0, 3).join(' ') : "Notion clé";
-
-    if (concept.length > 2 && block.length > 20) {
-      semanticPairs.push({
-        term: concept.charAt(0).toUpperCase() + concept.slice(1),
-        def: block.charAt(0).toUpperCase() + block.slice(1),
-        source: block
-      });
+  // 1. Recherche prioritaire des définitions explicites (ex: "Les Lumières : ensemble d'idées...")
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    const match = trimmed.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,40})\s*[:–—]\s*(.{15,})$/);
+    if (match) {
+      const term = match[1].trim();
+      const def = match[2].trim();
+      if (!semanticPairs.some(p => p.term.toLowerCase() === term.toLowerCase())) {
+        semanticPairs.push({
+          term: term.charAt(0).toUpperCase() + term.slice(1),
+          def: def.charAt(0).toUpperCase() + def.slice(1),
+          source: trimmed
+        });
+      }
     }
   });
+
+  // 2. Complément avec l'analyse de blocs si nécessaire
+  if (semanticPairs.length < 3) {
+    const rawBlocks = sourceText
+      .split(/\n\s*\n|(?<=[.!?])\s+/)
+      .map((b) => b.replace(/^[-•*0-9.]+\s*/, '').trim())
+      .filter((b) => b.length > 30);
+
+    rawBlocks.forEach((block) => {
+      const sentences = block.split(/(?<=[.!?])\s+/);
+      if (sentences.length === 0) return;
+
+      const mainSentence = sentences[0];
+      const words = mainSentence.replace(/[,;:!?()]/g, '').split(/\s+/);
+      const keyWords = words.filter(w => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()));
+      const concept = keyWords.length > 0 ? keyWords.slice(0, 3).join(' ') : "Notion clé";
+
+      if (concept.length > 2 && block.length > 20 && !semanticPairs.some(p => p.term.toLowerCase() === concept.toLowerCase())) {
+        semanticPairs.push({
+          term: concept.charAt(0).toUpperCase() + concept.slice(1),
+          def: block.charAt(0).toUpperCase() + block.slice(1),
+          source: block
+        });
+      }
+    });
+  }
 
   return semanticPairs;
 }
@@ -206,7 +225,7 @@ function generateAllExercisesLocal(sourceText) {
 
     generatedQuestions.push({
       id: index + 1,
-      question: `D'après le cours, quelle est l'affirmation exacte concernant « ${pair.term} » ?`,
+      question: `Qu'est-ce que « ${pair.term} » d'après le cours ?`,
       options: allOptions,
       correctAnswer: allOptions.indexOf(correctText),
       explanation: pair.source
@@ -246,8 +265,8 @@ function buildSessionSteps(questions, flashcards, fillBlanks) {
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   
-  const [subjectList, setSubjectList] = useState(['React / Web', 'Histoire', 'Mathématiques']);
-  const [selectedSubject, setSelectedSubject] = useState('React / Web');
+  const [subjectList, setSubjectList] = useState(['Histoire-Géo', 'Français', 'Mathématiques', 'Sciences']);
+  const [selectedSubject, setSelectedSubject] = useState('Histoire-Géo');
   const [newSubjectInput, setNewSubjectInput] = useState('');
   const [savedDecks, setSavedDecks] = useState([]);
 
@@ -266,7 +285,6 @@ export default function App() {
   const [combo, setCombo] = useState(0);
   const [isSessionFinished, setIsSessionFinished] = useState(false);
 
-  // État d'inversion propre de la Flashcard
   const [isCardFlipped, setIsCardFlipped] = useState(false);
 
   const [selectedAnswer, setSelectedAnswer] = useState(null);
@@ -378,7 +396,7 @@ export default function App() {
   const advanceToNextStep = useCallback(() => {
     if (currentStepIdx + 1 < sessionSteps.length && lives > 0) {
       setCurrentStepIdx((prev) => prev + 1);
-      setIsCardFlipped(false); // Réinitialiser le retournement de la carte
+      setIsCardFlipped(false);
       setSelectedAnswer(null);
       setUserBlankInput('');
       setStepResultState(null);
@@ -462,16 +480,16 @@ export default function App() {
     try {
       let generated;
       if (apiKey && apiKey.trim().length > 5) {
-        setOcrProgress("Formulation personnalisée par l'IA...");
+        setOcrProgress("Analyse pédagogique par l'IA...");
         try {
           generated = await generateExercisesWithExternalAI(text, apiKey);
         } catch (apiErr) {
           console.warn("IA indisponible, passage sur le moteur local :", apiErr);
-          setOcrProgress("Bascule automatique sur l'analyse locale...");
+          setOcrProgress("Bascule sur l'analyseur local des définitions...");
           generated = generateAllExercisesLocal(text);
         }
       } else {
-        setOcrProgress("Analyse locale sémantique...");
+        setOcrProgress("Extraction des définitions du cours...");
         generated = generateAllExercisesLocal(text);
       }
 
@@ -480,7 +498,7 @@ export default function App() {
       setFillBlanks(generated.fillBlanks || []);
 
       saveDeckToStorage(
-        text.slice(0, 25) + '...',
+        text.slice(0, 30) + '...',
         selectedSubject,
         generated.questions || [],
         generated.flashcards || [],
@@ -567,7 +585,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Extraction du texte PDF...");
+        setOcrProgress("Extraction du texte du PDF...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -620,7 +638,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.7</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v3.8 (Spécial Révisions)</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -641,16 +659,16 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">IA & Génération Pédagogique</h2>
-                <p className="text-slate-600 text-sm mt-1">Configurez votre clé Gemini/OpenAI (enregistrée automatiquement).</p>
+                <h2 className="text-2xl font-bold text-slate-900">Aide aux Révisions Ludiques</h2>
+                <p className="text-slate-600 text-sm mt-1">Importez un cours (PDF, photo ou texte) : StudySnap extrait automatiquement les définitions clés !</p>
               </div>
 
-              {/* SAUVEGARDE PERMANENTE DE LA CLÉ API */}
+              {/* CLÉ API */}
               <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 space-y-2">
                 <div className="flex justify-between items-center">
                   <div className="flex items-center space-x-2">
                     <Cpu className="w-4 h-4 text-indigo-600" />
-                    <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Clé API (Gemini / OpenAI)</span>
+                    <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Clé API (Optionnelle - Gemini / OpenAI)</span>
                   </div>
                   {isKeySavedSuccess && <span className="text-xs text-green-600 font-semibold flex items-center space-x-1"><CheckCircle2 className="w-3.5 h-3.5" /> <span>Clé enregistrée !</span></span>}
                 </div>
@@ -661,14 +679,13 @@ export default function App() {
                     type="password"
                     value={apiKey}
                     onChange={(e) => handleSaveApiKey(e.target.value)}
-                    placeholder="Collez votre clé Gemini (AIzaSy...) ou OpenAI (sk-...)"
+                    placeholder="Collez votre clé Gemini (AIzaSy...) ou laissez vide (moteur local auto)"
                     className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400 font-mono"
                   />
-                  <button onClick={() => handleSaveApiKey(apiKey)} className="p-1 text-indigo-600 hover:text-indigo-800" title="Enregistrer la clé">
+                  <button onClick={() => handleSaveApiKey(apiKey)} className="p-1 text-indigo-600 hover:text-indigo-800" title="Enregistrer">
                     <Save className="w-4 h-4" />
                   </button>
                 </div>
-                <p className="text-[11px] text-slate-500">🔒 Votre clé est stockée uniquement dans votre navigateur.</p>
               </div>
 
               <div className="space-y-2">
@@ -699,7 +716,7 @@ export default function App() {
               <div className="border-t border-slate-100 my-2"></div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner le document (PDF / Photo / Image)</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">2. Scanner le cours (PDF / Photo / Image)</label>
                 {isCameraActive ? (
                   <div className="space-y-2 text-center">
                     <video ref={videoRef} autoPlay playsInline className="w-full max-h-64 object-cover rounded-xl border-2 border-indigo-500" />
@@ -716,23 +733,23 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <button onClick={startCamera} className="p-4 border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/50 rounded-xl flex flex-col items-center justify-center transition">
                       <Camera className="w-6 h-6 text-indigo-600 mb-1" />
-                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo du cours</span>
+                      <span className="text-sm font-semibold text-indigo-900">Prendre une photo de la leçon</span>
                     </button>
                     <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/20 hover:border-indigo-400 rounded-xl p-4 relative text-center flex flex-col items-center justify-center cursor-pointer">
                       <input type="file" onChange={handleFileUpload} accept=".pdf,image/*,.txt,.json" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <Upload className="w-6 h-6 text-indigo-500 mb-1" />
-                      <span className="text-sm font-semibold text-slate-700">Importer PDF ou Image</span>
+                      <span className="text-sm font-semibold text-slate-700">Importer PDF du cours</span>
                     </div>
                   </div>
                 )}
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Ou copier-coller votre texte</label>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Ou copier-coller le cours</label>
                 <textarea
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Collez le texte du cours ici..."
+                  placeholder="Collez le texte du cours ici (ex: Les Lumières : ensemble d'idées...)..."
                   rows={3}
                   className="w-full p-3 text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
@@ -766,249 +783,296 @@ export default function App() {
                     <div className="flex items-center space-x-2">
                       <span className="text-indigo-600 font-bold">Étape {currentStepIdx + 1} / {sessionSteps.length}</span>
                       {combo > 1 && (
-                        <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full flex items-center space-x-1">
-                          <Zap className="w-3 h-3 fill-amber-500" /> <span>Combo x{combo}</span>
+                        <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full font-semibold flex items-center space-x-0.5">
+                          <Zap className="w-3 h-3" />
+                          <span>Combo x{combo}</span>
                         </span>
                       )}
                     </div>
-                    
                     <div className="flex items-center space-x-4">
-                      <div className="flex space-x-1">
-                        {[1, 2, 3].map((heart) => (
-                          <Heart key={heart} className={`w-5 h-5 ${heart <= lives ? 'text-red-500 fill-red-500' : 'text-slate-200'}`} />
+                      <div className="flex space-x-1 text-red-500">
+                        {Array.from({ length: 3 }).map((_, i) => (
+                          <Heart
+                            key={i}
+                            className={`w-4 h-4 ${i < lives ? 'fill-current text-red-500' : 'text-slate-200'}`}
+                          />
                         ))}
                       </div>
-
-                      <div className="flex items-center space-x-1 text-slate-700 font-mono">
-                        <Award className="w-4 h-4 text-indigo-600" />
-                        <span>{score} pts</span>
-                      </div>
+                      <div className="text-sm font-semibold text-slate-700">
+                        Score: <span className="text-indigo-600">{score}</span>
                     </div>
-                  </div>
-
-                  <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                    <div 
-                      className="bg-indigo-600 h-full transition-all duration-300 rounded-full"
-                      style={{ width: `${((currentStepIdx + 1) / sessionSteps.length) * 100}%` }}
-                    ></div>
-                  </div>
-                </div>
-
-                {/* FLASHCARD INTERACTIVE (CORRIGÉE : SEPARATION CLAIRE RECTO/VERSO) */}
-                {currentStep.type === 'flashcard' && (
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold bg-amber-50 text-amber-700 px-3 py-1 rounded-full flex items-center space-x-1">
-                        <HelpCircle className="w-3.5 h-3.5" /> <span>Flashcard Découverte</span>
-                      </span>
-                      <button onClick={() => speakText(isCardFlipped ? currentStep.data.back : currentStep.data.front)} className="p-1.5 text-slate-500 hover:text-indigo-600">
-                        <Volume2 className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <div 
-                      onClick={() => setIsCardFlipped(!isCardFlipped)}
-                      className="bg-gradient-to-br from-indigo-50/60 to-purple-50/60 border-2 border-indigo-200 rounded-2xl p-8 min-h-64 flex flex-col items-center justify-center text-center select-none cursor-pointer hover:shadow-md transition relative"
-                    >
-                      <span className="absolute top-4 right-4 text-[10px] font-bold text-indigo-400 bg-white px-2 py-1 rounded-md shadow-xs flex items-center space-x-1">
-                        <RotateCw className="w-3 h-3" />
-                        <span>{isCardFlipped ? "VERSO (DÉFINITION)" : "RECTO (CONCEPT)"}</span>
-                      </span>
-
-                      {!isCardFlipped ? (
-                        <div className="space-y-2">
-                          <p className="text-xs uppercase tracking-wider font-semibold text-indigo-500">Concept / Terme :</p>
-                          <h3 className="text-2xl font-extrabold text-slate-900">{currentStep.data.front}</h3>
-                          <p className="text-xs text-slate-400 mt-4">(Cliquez sur la carte pour voir l'explication)</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <p className="text-xs uppercase tracking-wider font-semibold text-purple-600">Définition / Explication :</p>
-                          <p className="text-base text-slate-800 leading-relaxed max-w-lg font-medium">{currentStep.data.back}</p>
+                    {currentStep.type !== 'flashcard' && (
+                        <div className={`flex items-center space-x-1 text-xs font-bold ${timeLeft <= 5 ? 'text-red-600 animate-pulse' : 'text-slate-600'}`}>
+                          <Timer className="w-4 h-4" />
+                          <span>{timeLeft}s</span>
                         </div>
                       )}
                     </div>
+                  </div>
+                  
+                  {/* Barre de progression */}
+                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-indigo-600 h-full transition-all duration-300"
+                      style={{ width: `${((currentStepIdx + 1) / sessionSteps.length) * 100}%` }}
+                    />
+                  </div>
+                </div>
 
-                    <div className="flex justify-end">
-                      <button onClick={advanceToNextStep} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2.5 rounded-xl flex items-center space-x-2 transition">
-                        <span>J'ai compris !</span>
+                {/* Flashcard */}
+                {currentStep.type === 'flashcard' && (
+                  <div className="space-y-6 text-center">
+                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      <span>Carte Mémoire (Révision)</span>
+                      <span>Recto / Verso</span>
+                    </div>
+
+                    <div
+                      onClick={() => setIsCardFlipped(!isCardFlipped)}
+                      className={`w-full min-h-[220px] p-6 rounded-2xl border-2 cursor-pointer transition-all duration-300 flex flex-col items-center justify-center relative shadow-sm ${
+                        isCardFlipped ? 'bg-indigo-50 border-indigo-300' : 'bg-white border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <span className="absolute top-4 left-4 text-xs font-medium text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-lg">
+                        {isCardFlipped ? 'Définition (Verso)' : 'Notion / Concept (Recto)'}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          speakText(isCardFlipped ? currentStep.data.back : currentStep.data.front);
+                        }}
+                        className="absolute top-4 right-4 p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition"
+                        title="Écouter"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
+
+                      <div className="my-6 max-w-md">
+                        <h3 className={`font-bold transition-all ${isCardFlipped ? 'text-base text-slate-800' : 'text-2xl text-slate-900'}`}>
+                          {isCardFlipped ? currentStep.data.back : currentStep.data.front}
+                        </h3>
+                      </div>
+
+                      <p className="text-xs text-slate-400 italic">Cliquez sur la carte pour voir la définition</p>
+                  </div>
+
+                  <button
+                    onClick={advanceToNextStep}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition shadow-sm flex items-center justify-center space-x-2"
+                  >
+                    <span>Carte suivante</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+            )}
+
+            {/* Quiz QCM */}
+            {currentStep.type === 'quiz' && (
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                    <span>Question du Cours</span>
+                  </div>
+
+                  <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                    <h3 className="text-lg font-bold text-slate-900">{currentStep.data.question}</h3>
+                  </div>
+
+                  <div className="space-y-3">
+                    {currentStep.data.options.map((option, idx) => {
+                      let btnStyle = "bg-white border-slate-200 text-slate-800 hover:border-indigo-400";
+                      if (selectedAnswer !== null) {
+                        if (idx === currentStep.data.correctAnswer) {
+                          btnStyle = "bg-green-50 border-green-500 text-green-900 font-semibold";
+                        } else if (idx === selectedAnswer) {
+                          btnStyle = "bg-red-50 border-red-500 text-red-900";
+                        } else {
+                          btnStyle = "opacity-50 bg-white border-slate-200 text-slate-500";
+                        }
+                      }
+
+                      return (
+                        <button
+                          key={idx}
+                          onClick={() => handleAnswerSelect(idx)}
+                          disabled={selectedAnswer !== null}
+                          className={`w-full p-4 rounded-xl border-2 text-left transition flex justify-between items-center ${btnStyle}`}
+                        >
+                          <span className="text-sm">{option}</span>
+                          {selectedAnswer !== null && idx === currentStep.data.correctAnswer && (
+                            <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
+                          )}
+                          {selectedAnswer !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && (
+                            <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {stepResultState !== null && (
+                    <div className="space-y-4 pt-2 animate-fade-in">
+                      <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                        <p className="font-semibold mb-1">{stepResultState === 'correct' ? '✨ Bonne réponse !' : '❌ Pas tout à fait.'}</p>
+                        <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
+                      </div>
+                      <button
+                        onClick={advanceToNextStep}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
+                      >
+                        <span>Étape suivante</span>
                         <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
-                  </div>
-                )}
-
-                {/* QCM */}
-                {currentStep.type === 'quiz' && (
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full">Question QCM</span>
-                      <div className="flex items-center space-x-2">
-                        <button onClick={() => speakText(currentStep.data.question)} className="p-1.5 text-slate-500 hover:text-indigo-600">
-                          <Volume2 className="w-4 h-4" />
-                        </button>
-                        <div className="flex items-center space-x-1 text-slate-500 text-xs font-mono font-bold">
-                          <Timer className="w-3.5 h-3.5" />
-                          <span className={timeLeft < 10 ? 'text-red-500' : ''}>{timeLeft}s</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <h3 className="text-lg font-semibold text-slate-800">{currentStep.data.question}</h3>
-
-                    <div className="space-y-2.5">
-                      {currentStep.data.options.map((option, idx) => {
-                        let btnStyle = "border-slate-200 hover:border-indigo-300 hover:bg-slate-50";
-                        if (stepResultState !== null) {
-                          if (idx === currentStep.data.correctAnswer) btnStyle = "border-green-500 bg-green-50 text-green-800 font-medium";
-                          else if (idx === selectedAnswer) btnStyle = "border-red-500 bg-red-50 text-red-700";
-                        }
-                        return (
-                          <button
-                            key={idx}
-                            disabled={stepResultState !== null}
-                            onClick={() => handleAnswerSelect(idx)}
-                            className={`w-full text-left p-3.5 border-2 rounded-xl transition flex justify-between items-center text-sm ${btnStyle}`}
-                          >
-                            <span>{option}</span>
-                            {stepResultState !== null && idx === currentStep.data.correctAnswer && <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />}
-                            {stepResultState !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && <XCircle className="w-5 h-5 text-red-500 flex-shrink-0" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {stepResultState !== null && (
-                      <div className="p-4 bg-slate-50 rounded-xl text-xs text-slate-600 border border-slate-100">
-                        <p className="font-semibold text-slate-800 mb-1">Explication :</p>
-                        {currentStep.data.explanation}
-                      </div>
-                    )}
-
-                    {stepResultState !== null && (
-                      <div className="flex justify-end">
-                        <button onClick={advanceToNextStep} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2.5 rounded-xl flex items-center space-x-2 transition">
-                          <span>Suivant</span>
-                          <ChevronRight className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* TROUS */}
-                {currentStep.type === 'fillblank' && (
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold bg-purple-50 text-purple-700 px-3 py-1 rounded-full">Mot Manquant</span>
-                      <button onClick={() => speakText(currentStep.data.sentenceWithBlank)} className="p-1.5 text-slate-500 hover:text-indigo-600">
-                        <Volume2 className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <div className="p-6 bg-slate-50 rounded-2xl text-center space-y-4">
-                      <p className="text-base font-medium text-slate-800">{currentStep.data.sentenceWithBlank}</p>
-                      <input
-                        type="text"
-                        value={userBlankInput}
-                        onChange={(e) => setUserBlankInput(e.target.value)}
-                        disabled={stepResultState !== null}
-                        placeholder="Tapez la réponse..."
-                        className="w-full max-w-xs p-3 text-center border-2 border-slate-200 rounded-xl focus:border-indigo-500 focus:outline-none"
-                      />
-                    </div>
-
-                    {stepResultState === 'correct' && <div className="p-3 bg-green-50 text-green-700 rounded-xl text-sm font-semibold">Excellente réponse ! 🎉</div>}
-                    {stepResultState === 'incorrect' && <div className="p-3 bg-red-50 text-red-700 rounded-xl text-sm font-semibold">Incorrect. La réponse était : <b>{currentStep.data.missingWord}</b></div>}
-
-                    <div className="flex justify-end space-x-2">
-                      {stepResultState === null ? (
-                        <button onClick={handleCheckFillBlank} disabled={!userBlankInput.trim()} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-medium transition">
-                          Vérifier
-                        </button>
-                      ) : (
-                        <button onClick={advanceToNextStep} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-medium transition flex items-center space-x-1">
-                          <span>Suivant</span>
-                          <ChevronRight className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="text-center py-6 space-y-6">
-                <Award className="w-16 h-16 text-amber-500 mx-auto" />
-                <h2 className="text-2xl font-bold text-slate-800">
-                  {lives > 0 ? "Session réussie !" : "Plus de vies !"}
-                </h2>
-                
-                <div className="bg-indigo-50 p-6 rounded-2xl inline-block space-y-2">
-                  <p className="text-3xl font-extrabold text-indigo-600">{score} points</p>
-                  <p className="text-xs text-slate-600">Matière : <b>{selectedSubject}</b></p>
+                  )}
                 </div>
+          )}
 
-                <div className="flex justify-center space-x-3">
-                  <button onClick={() => startSession()} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-medium flex items-center space-x-2 hover:bg-indigo-700 transition">
-                    <RefreshCw className="w-4 h-4" /> <span>Recommencer la session</span>
+          {/* Texte à trous */}
+          {currentStep.type === 'fillblank' && (
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                    <span>Texte à Trous (Mémorisation)</span>
+                  </div>
+
+                  <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                    <h3 className="text-lg font-medium text-slate-900">
+                      {currentStep.data.sentenceWithBlank}
+                    </h3>
+                  </div>
+
+                  <div className="space-y-3">
+                    <input
+                      type="text"
+                      value={userBlankInput}
+                      onChange={(e) => setUserBlankInput(e.target.value)}
+                      disabled={stepResultState !== null}
+                      placeholder="Écrivez le mot manquant..."
+                      className="w-full p-4 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && stepResultState === null) {
+                          handleCheckFillBlank();
+                        }
+                      }}
+                    />
+                    {stepResultState === null ? (
+                      <button
+                        onClick={handleCheckFillBlank}
+                        disabled={!userBlankInput.trim()}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition shadow-sm"
+                      >
+                        Vérifier
+                      </button>
+                    ) : (
+                      <div className="space-y-4 animate-fade-in">
+                        <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                          <p className="font-semibold mb-1">
+                            {stepResultState === 'correct' ? '✨ C\'est exact !' : `❌ Le mot attendu était : "${currentStep.data.missingWord}"`}
+                          </p>
+                          <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
+                        </div>
+                        <button
+                          onClick={advanceToNextStep}
+                          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
+                        >
+                          <span>Étape suivante</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+          )}
+        </div>
+          ) : (
+            <div className="text-center space-y-6 py-8">
+              <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto text-amber-600">
+                <Award className="w-10 h-10" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-2xl font-bold text-slate-900">Session Terminée ! 🎉</h2>
+                <p className="text-sm text-slate-600">Bravo pour tes efforts de révision !</p>
+              </div>
+
+              <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-sm mx-auto space-y-3">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-600">Score final :</span>
+                  <span className="font-bold text-indigo-600">{score} pts</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-600">Matière :</span>
+                  <span className="font-bold text-slate-800">{selectedSubject}</span>
+                </div>
+              </div>
+
+              <div className="flex justify-center space-x-3">
+                <button
+                  onClick={() => startSession()}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition flex items-center space-x-2 shadow-sm"
+                >
+                  <RotateCw className="w-4 h-4" />
+                  <span>Recommencer</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('home')}
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-6 py-3 rounded-xl text-sm font-medium transition"
+                >
+                  Accueil
+                </button>
+              </div>
+          </div>
+        )}
+      </div>
+    )}
+
+    {/* MES DECKS */}
+    {activeTab === 'decks' && (
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-xl font-bold text-slate-900">Mes Decks de Cours Enregistrés</h2>
+          <span className="text-xs bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg font-semibold">
+            {savedDecks.length} deck(s)
+          </span>
+        </div>
+
+        {savedDecks.length === 0 ? (
+          <div className="text-center py-12 text-slate-400 space-y-2">
+            <Folder className="w-12 h-12 mx-auto opacity-40" />
+            <p className="text-sm">Aucun deck enregistré pour le moment.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {savedDecks.map((deck) => (
+              <div key={deck.id} className="p-4 rounded-xl border border-slate-200 hover:border-indigo-300 transition flex justify-between items-center bg-slate-50/50">
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-medium">{deck.subject}</span>
+                    <span className="text-xs text-slate-400">{deck.date}</span>
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-800">{deck.title}</h3>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleLoadDeck(deck)}
+                    className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium flex items-center space-x-1"
+                    title="Lancer"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteDeck(deck.id)}
+                    className="p-2 bg-slate-200 hover:bg-red-100 text-slate-600 hover:text-red-600 rounded-xl transition"
+                    title="Supprimer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
-            )}
+            ))}
           </div>
         )}
-
-        {/* MES DECKS */}
-        {activeTab === 'decks' && (
-          <div className="space-y-6">
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-              <h2 className="text-xl font-bold text-slate-800 mb-4">Mes Decks Enregistrés</h2>
-              {savedDecks.length === 0 ? (
-                <p className="text-slate-500 text-sm">Aucun deck sauvegardé.</p>
-              ) : (
-                <div className="space-y-3">
-                  {savedDecks.map((deck) => (
-                    <div key={deck.id} className="p-4 border border-slate-200 rounded-xl flex justify-between items-center bg-slate-50 hover:bg-slate-100 transition">
-                      <div>
-                        <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full">{deck.subject}</span>
-                        <h4 className="text-sm font-semibold text-slate-800 mt-1">{deck.title}</h4>
-                        <p className="text-xs text-slate-400">Créé le {deck.date} • {deck.questions ? deck.questions.length : 0} étapes</p>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <button onClick={() => handleLoadDeck(deck)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium flex items-center space-x-1">
-                          <Play className="w-3.5 h-3.5" /> <span>Lancer</span>
-                        </button>
-                        <button onClick={() => handleDeleteDeck(deck.id)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-              <h2 className="text-xl font-bold text-slate-800 mb-4">Historique des scores</h2>
-              {history.length === 0 ? (
-                <p className="text-slate-500 text-sm">Aucun résultat récent.</p>
-              ) : (
-                <div className="divide-y divide-slate-100">
-                  {history.map((item, idx) => (
-                    <div key={idx} className="py-3 flex justify-between items-center text-sm">
-                      <div>
-                        <span className="text-xs font-medium text-slate-500">{item.subject || 'Général'}</span>
-                        <p className="font-medium text-slate-800">{item.date}</p>
-                      </div>
-                      <span className="font-bold text-indigo-600">{item.score} pts ({item.percentage}%)</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </main>
     </div>
-  );
+  )}
+    </main>
+  </div>
+);
 }
