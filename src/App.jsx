@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, Home, Brain, 
-  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save, RotateCw
+  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save, RotateCw, Wand2
 } from 'lucide-react';
 
 const STOP_WORDS = new Set([
@@ -22,29 +22,89 @@ const speakText = (text) => {
   }
 };
 
-// --- APPEL OPTIMISÉ POUR IA GEMINI / OPENAI ---
+// --- ALGORITHME DE NETTOYAGE ET RECONSTITUTION DES PARAGRAPHES ---
+function cleanAndStructureRawText(rawText) {
+  if (!rawText) return '';
+
+  return rawText
+    // Supprimer les liens internet et citations parasites
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/www\.\S+/gi, '')
+    .replace(/\b4H-Chap\.\d+:?\s*[^\n]*/gi, '')
+    .replace(/\b\d+\/5\b/g, '')
+    
+    // Recoller les mots coupés par un retour à la ligne au milieu d'une phrase
+    // Si la ligne se termine sans point, point d'interrogation ou deux-points, on colle à la suivante
+    .replace(/([^.:!?\n])\n+([a-zà-öø-ÿ0-9])/gi, '$1 $2')
+    
+    // Normaliser les espaces multiples et sauts de ligne
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n')
+    .trim();
+}
+
+// --- EXTRACTION STRICTE ET COMPLÈTE DE TOUTES LES DÉFINITIONS ---
+function extractAllDefinitionsFromText(sourceText) {
+  const cleanedText = cleanAndStructureRawText(sourceText);
+  const lines = cleanedText.split('\n');
+  const definitions = [];
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed.length < 12) return;
+
+    // Détection des structures "Terme : Définition complète"
+    const match = trimmed.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,45})\s*[:–—]\s*(.{10,})$/);
+    if (match) {
+      let term = match[1].trim();
+      let def = match[2].trim();
+
+      // S'assurer que la définition se termine par un point
+      if (!def.endsWith('.') && !def.endsWith('!') && !def.endsWith('?')) {
+        def += '.';
+      }
+
+      // Nettoyage Majuscules
+      term = term.charAt(0).toUpperCase() + term.slice(1);
+      def = def.charAt(0).toUpperCase() + def.slice(1);
+
+      if (!definitions.some(d => d.term.toLowerCase() === term.toLowerCase())) {
+        definitions.push({ term, def, source: `${term} : ${def}` });
+      }
+    }
+  });
+
+  return definitions;
+}
+
+// --- GENERATION DES EXERCICES PAR L'IA GEMINI OU OPENAI ---
 async function generateExercisesWithExternalAI(sourceText, apiKey) {
   const cleanKey = apiKey.trim();
   const isGeminiKey = cleanKey.startsWith('AIza') || !cleanKey.startsWith('sk-');
+  const structuredText = cleanAndStructureRawText(sourceText);
 
   const promptText = `
-Tu es un professeur d'histoire-géo et expert pédagogique bienveillant. Analyse le cours suivant et génère un jeu de révision au format JSON STRICT. 
-IGNORE COMPLÈTEMENT les liens internet (http, https), les adresses web, les numéros de page et les éléments parasites.
-VEILLE À CE QUE TOUTES LES PHRASES DE DÉFINITION SOIENT ENTIÈRES ET COMPLÈTES (ne coupe jamais une phrase au milieu !).
+Tu es un professeur d'histoire-géo et expert pédagogique pour enfants. 
+Analyse le cours suivant et génère un jeu de révision au format JSON STRICT.
 
-CONSIGNES STRICTES DE FORMATAGE :
-1. "questions" : Crée 5 QCM de niveau collège. Pour chaque question :
-   - 'question' : Doit OBLIGATOIREMENT commencer par un mot interrogatif ("Qui", "Que", "Quoi", "Comment" ou "Pourquoi") et se terminer par un point d'interrogation "?" (ex: "Que sont les Lumières ?", "Qu'est-ce qu'un philosophe ?").
-   - 'options' : 4 réponses crédibles, complètes et élaborées. Chaque option DOIT commencer par une majuscule et se terminer par un point ".".
+CONSIGNES DE SÉLECTION DE TEXTE ET VARIÉTÉ :
+- Analyse TOUT le texte fourni du début à la fin.
+- Choisis AU HASARD différentes notions parmi toutes celles présentes (varie à chaque génération !).
+- Ne coupe JAMAIS les phrases au milieu. Les définitions doivent être ENTIÈRES et COMPLÈTES (se terminer par un point ".").
+
+CONSIGNES DE FORMATAGE :
+1. "questions" : Crée 5 QCM de réflexion sur le cours :
+   - 'question' : Commence OBLIGATOIREMENT par un mot interrogatif ("Qui", "Que", "Quoi", "Comment", "Pourquoi") et finit par "?". (ex: "Que sont les Lumières ?", "Qu'est-ce qu'une monarchie absolue ?").
+   - 'options' : 4 réponses complètes (1 vraie définition intégrale + 3 fausses propositions réalistes). Chaque option commence par une majuscule et finit par un point ".".
    - 'correctAnswer' : l'index (0, 1, 2 ou 3) de la bonne réponse.
-   - 'explanation' : une explication claire et COMPLÈTE commençant par une majuscule et se terminant par un point ".".
-2. "flashcards" : Crée 5 cartes mémoires basées sur les définitions du cours. 
-   - 'front' : LA DÉFINITION COMPLÈTE (une phrase entière qui commence par une majuscule et finit par un point ".").
-   - 'back' : LE MOT-CLÉ / NOM DU CONCEPT À TROUVER (ex: "Les Lumières", "La raison", "Un philosophe").
-3. "fillBlanks" : 3 à 5 phrases à trous portant sur les termes essentiels du cours.
+   - 'explanation' : Une explication complète se terminant par un point ".".
+2. "flashcards" : Crée 5 cartes mémoires :
+   - 'front' : LA DÉFINITION COMPLÈTE ET ENTIÈRE (une phrase propre finissant par un point ".").
+   - 'back' : LE MOT-CLÉ / NOM DU CONCEPT À DEVINER (ex: "Les Lumières", "La Censure", "Un philosophe").
+3. "fillBlanks" : 3 à 5 phrases à trous portant sur des mots techniques.
 
 TEXTE DU COURS :
-"""${sourceText.slice(0, 5000)}"""
+"""${structuredText.slice(0, 6000)}"""
 
 Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'introduction, AUCUNE balise markdown extra) :
 {
@@ -54,14 +114,14 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
       "question": "Que sont... ?",
       "options": ["Première proposition.", "Deuxième proposition.", "Troisième proposition.", "Quatrième proposition."],
       "correctAnswer": 0,
-      "explanation": "Explication basée sur le cours."
+      "explanation": "Explication complète."
     }
   ],
   "flashcards": [
     { "id": 1, "front": "Ensemble d'idées nouvelles, formulées par des philosophes et des savants, qui circulent en Europe au XVIIIe siècle.", "back": "Les Lumières" }
   ],
   "fillBlanks": [
-    { "id": 1, "sentenceWithBlank": "La fonction [___] permet de traiter les données.", "missingWord": "principale", "explanation": "Rappel de la règle." }
+    { "id": 1, "sentenceWithBlank": "La [___] permet de contrôler la publication des livres.", "missingWord": "Censure", "explanation": "Définition de la censure." }
   ]
 }
 `;
@@ -90,7 +150,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
     }
 
     if (!response || !response.ok) {
-      throw new Error("Erreur avec la clé Gemini. Bascule automatique sur le moteur local.");
+      throw new Error("Erreur avec la clé Gemini. Bascule sur le moteur local.");
     }
 
     const data = await response.json();
@@ -105,7 +165,7 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
       body: JSON.stringify({
         model: 'gpt-3.5-turbo',
         messages: [{ role: 'user', content: promptText }],
-        temperature: 0.3
+        temperature: 0.5 // Température augmentée pour maximiser la variété des questions
       })
     });
 
@@ -121,60 +181,26 @@ Réponds STRICTEMENT avec un objet JSON structuré comme suit (AUCUN texte d'int
   return JSON.parse(jsonContent);
 }
 
-// --- MOTEUR LOCAL DE SECOURS (AVEC FUSION DES PHRASES MULTI-LIGNES) ---
-function semanticParagraphAnalysis(sourceText) {
-  if (!sourceText) return [];
-
-  // Nettoyage global du texte : fusion des sauts de ligne intempestifs
-  const cleanSource = sourceText
-    .replace(/(http|www)\S+/gi, '') // Supprime liens
-    .replace(/([a-zà-öø-ÿ,])\n([a-zà-öø-ÿ])/gi, '$1 $2'); // Recolle les phrases coupées en milieu de ligne
-
-  const lines = cleanSource.split('\n');
-  const semanticPairs = [];
-
-  lines.forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.length < 15) return;
-
-    // Recherche du format "Terme : Définition"
-    const match = trimmed.match(/^([A-ZÀ-ÖØ-ßa-zà-öø-ÿ\s,-]{2,40})\s*[:–—]\s*(.{15,})$/);
-    if (match) {
-      let term = match[1].trim();
-      let def = match[2].trim();
-
-      term = term.charAt(0).toUpperCase() + term.slice(1);
-      if (!def.endsWith('.')) def += '.';
-      def = def.charAt(0).toUpperCase() + def.slice(1);
-
-      if (!semanticPairs.some(p => p.term.toLowerCase() === term.toLowerCase())) {
-        semanticPairs.push({
-          term,
-          def,
-          source: trimmed
-        });
-      }
-    }
-  });
-
-  return semanticPairs;
-}
-
+// --- MOTEUR LOCAL DE SECOURS (AVEC TIRAGE ALÉATOIRE COMPLET SUR L'ENSEMBLE DU TEXTE) ---
 function generateAllExercisesLocal(sourceText) {
-  const pairs = semanticParagraphAnalysis(sourceText);
+  const allDefs = extractAllDefinitionsFromText(sourceText);
+
+  // Mélange aléatoire (Fisher-Yates Shuffle) de toutes les définitions trouvées
+  const shuffledDefs = [...allDefs].sort(() => Math.random() - 0.5);
 
   const generatedQuestions = [];
   const generatedFlashcards = [];
   const generatedFillBlanks = [];
 
-  pairs.forEach((pair, index) => {
-    // INVERSION : RECTO = DÉFINITION COMPLÈTE | VERSO = MOT À TROUVER
+  shuffledDefs.forEach((pair, index) => {
+    // FLASHCARD : RECTO = DÉFINITION COMPLÈTE | VERSO = MOT-CLÉ
     generatedFlashcards.push({
       id: index + 1,
       front: pair.def,
       back: pair.term
     });
 
+    // TEXTE À TROUS
     const words = pair.term.split(' ');
     const targetWord = words[words.length - 1];
     const sentenceWithBlank = pair.source.replace(new RegExp(`\\b${targetWord}\\b`, 'gi'), '[___]');
@@ -188,8 +214,9 @@ function generateAllExercisesLocal(sourceText) {
       });
     }
 
+    // QCM
     const correctText = pair.def;
-    const otherDefs = pairs.filter(p => p.term !== pair.term).map(p => p.def);
+    const otherDefs = shuffledDefs.filter(p => p.term !== pair.term).map(p => p.def);
     
     let wrongOptions = [];
     while (wrongOptions.length < 3 && otherDefs.length > 0) {
@@ -201,9 +228,9 @@ function generateAllExercisesLocal(sourceText) {
     }
 
     const fallbacks = [
-      `Une notion non vérifiée dans le contexte du document.`,
-      `Une hypothèse contredite par l'analyse globale du cours.`,
-      `Un élément secondaire appartenant à un autre chapitre.`
+      `Une notion non vérifiée dans le contexte de la leçon.`,
+      `Une hypothèse contredite par l'analyse du document.`,
+      `Un principe appartenant à une autre période historique.`
     ];
     while (wrongOptions.length < 3) {
       const fb = fallbacks[wrongOptions.length];
@@ -213,10 +240,11 @@ function generateAllExercisesLocal(sourceText) {
     const allOptions = [correctText, ...wrongOptions].sort(() => Math.random() - 0.5);
 
     let qText = `Que désigne « ${pair.term} » ?`;
-    if (pair.term.toLowerCase().startsWith('les ') || pair.term.toLowerCase().startsWith('des ')) {
-      qText = `Que sont ${pair.term.toLowerCase()} ?`;
-    } else if (pair.term.toLowerCase().startsWith('le ') || pair.term.toLowerCase().startsWith('la ') || pair.term.toLowerCase().startsWith('un ') || pair.term.toLowerCase().startsWith('une ')) {
-      qText = `Qu'est-ce que ${pair.term.toLowerCase()} ?`;
+    const lowerTerm = pair.term.toLowerCase();
+    if (lowerTerm.startsWith('les ') || lowerTerm.startsWith('des ')) {
+      qText = `Que sont ${lowerTerm} ?`;
+    } else if (lowerTerm.startsWith('le ') || lowerTerm.startsWith('la ') || lowerTerm.startsWith('un ') || lowerTerm.startsWith('une ')) {
+      qText = `Qu'est-ce que ${lowerTerm} ?`;
     }
 
     generatedQuestions.push({
@@ -248,12 +276,18 @@ function generateAllExercisesLocal(sourceText) {
 
 function buildSessionSteps(questions, flashcards, fillBlanks) {
   const steps = [];
-  if (flashcards) flashcards.slice(0, 4).forEach((fc) => steps.push({ type: 'flashcard', data: fc }));
+  
+  // On mélange les flashcards et les QCM pour renouveler l'expérience
+  const shuffledFc = [...(flashcards || [])].sort(() => Math.random() - 0.5).slice(0, 5);
+  const shuffledQ = [...(questions || [])].sort(() => Math.random() - 0.5).slice(0, 5);
+  const shuffledFb = [...(fillBlanks || [])].sort(() => Math.random() - 0.5).slice(0, 3);
 
-  const maxInter = Math.max(questions ? questions.length : 0, fillBlanks ? fillBlanks.length : 0);
+  shuffledFc.forEach((fc) => steps.push({ type: 'flashcard', data: fc }));
+
+  const maxInter = Math.max(shuffledQ.length, shuffledFb.length);
   for (let i = 0; i < maxInter; i++) {
-    if (questions && questions[i]) steps.push({ type: 'quiz', data: questions[i] });
-    if (fillBlanks && fillBlanks[i]) steps.push({ type: 'fillblank', data: fillBlanks[i] });
+    if (shuffledQ[i]) steps.push({ type: 'quiz', data: shuffledQ[i] });
+    if (shuffledFb[i]) steps.push({ type: 'fillblank', data: shuffledFb[i] });
   }
   return steps;
 }
@@ -465,10 +499,12 @@ export default function App() {
     }
   };
 
-  const handleProcessText = async (text) => {
+  const handleProcessText = async (textToProcess) => {
     setUploadError(null);
-    if (!text || !text.trim()) {
-      setUploadError("Le texte fourni est trop court ou vide.");
+    const cleanedText = cleanAndStructureRawText(textToProcess);
+    
+    if (!cleanedText || cleanedText.length < 20) {
+      setUploadError("Le texte du cours est trop court ou vide.");
       return;
     }
     setIsAnalyzing(true);
@@ -476,17 +512,17 @@ export default function App() {
     try {
       let generated;
       if (apiKey && apiKey.trim().length > 5) {
-        setOcrProgress("Analyse intelligente par l'IA...");
+        setOcrProgress("Génération variée des exercices par l'IA...");
         try {
-          generated = await generateExercisesWithExternalAI(text, apiKey);
+          generated = await generateExercisesWithExternalAI(cleanedText, apiKey);
         } catch (apiErr) {
           console.warn("IA indisponible, passage sur le moteur local :", apiErr);
-          setOcrProgress("Analyseur local des définitions...");
-          generated = generateAllExercisesLocal(text);
+          setOcrProgress("Moteur local : extraction des définitions...");
+          generated = generateAllExercisesLocal(cleanedText);
         }
       } else {
-        setOcrProgress("Extraction propre des définitions...");
-        generated = generateAllExercisesLocal(text);
+        setOcrProgress("Moteur local : extraction complète des définitions...");
+        generated = generateAllExercisesLocal(cleanedText);
       }
 
       setQuestions(generated.questions || []);
@@ -494,7 +530,7 @@ export default function App() {
       setFillBlanks(generated.fillBlanks || []);
 
       saveDeckToStorage(
-        text.slice(0, 30) + '...',
+        cleanedText.slice(0, 30) + '...',
         selectedSubject,
         generated.questions || [],
         generated.flashcards || [],
@@ -510,6 +546,11 @@ export default function App() {
       setIsAnalyzing(false);
       setOcrProgress('');
     }
+  };
+
+  const handleCleanTextButton = () => {
+    const cleaned = cleanAndStructureRawText(rawInputText);
+    setRawInputText(cleaned);
   };
 
   const startCamera = async () => {
@@ -562,9 +603,10 @@ export default function App() {
       const text = ret.data.text;
       if (!text || !text.trim()) throw new Error("Aucun texte lisible trouvé.");
 
-      setRawInputText(text);
+      const cleaned = cleanAndStructureRawText(text);
+      setRawInputText(cleaned);
       setOcrProgress('');
-      await handleProcessText(text);
+      await handleProcessText(cleaned);
     } catch (err) {
       setUploadError(err.message || "Erreur de lecture de l'image.");
       setIsAnalyzing(false);
@@ -581,7 +623,7 @@ export default function App() {
 
     try {
       if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
-        setOcrProgress("Analyse géospatiale du PDF...");
+        setOcrProgress("Extraction et nettoyage du PDF...");
         if (!window.pdfjsLib) {
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -627,11 +669,13 @@ export default function App() {
           fullText += pageText + '\n\n';
         }
 
-        if (!fullText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
+        const cleanedText = cleanAndStructureRawText(fullText);
 
-        setRawInputText(fullText);
+        if (!cleanedText.trim()) throw new Error("Le PDF ne contient pas de texte extractible.");
+
+        setRawInputText(cleanedText);
         setOcrProgress('');
-        await handleProcessText(fullText);
+        await handleProcessText(cleanedText);
       } else if (file.type.startsWith('image/')) {
         const reader = new FileReader();
         reader.onload = (e) => processImageOCR(e.target.result);
@@ -639,8 +683,9 @@ export default function App() {
       } else {
         const reader = new FileReader();
         reader.onload = async (e) => {
-          setRawInputText(e.target?.result);
-          await handleProcessText(e.target?.result);
+          const cleaned = cleanAndStructureRawText(e.target?.result);
+          setRawInputText(cleaned);
+          await handleProcessText(cleaned);
         };
         reader.readAsText(file);
       }
@@ -658,7 +703,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v4.1</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.0 (Phrases Entières)</span></h1>
         </div>
         <nav className="flex space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -679,8 +724,8 @@ export default function App() {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Révisions Ludiques & Structurées</h2>
-                <p className="text-slate-600 text-sm mt-1">Importez le cours : StudySnap extrait les phrases complètes et ajuste l'ordre des cartes.</p>
+                <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Intelligent</h2>
+                <p className="text-slate-600 text-sm mt-1">L'application reconstitue automatiquement les phrases entières et varie les questions à chaque partie.</p>
               </div>
 
               {/* CLÉ API */}
@@ -765,12 +810,20 @@ export default function App() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Aperçu du texte extrait</label>
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Texte extrait & Reconstitué</label>
+                  {rawInputText.trim() && (
+                    <button onClick={handleCleanTextButton} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center space-x-1 font-semibold">
+                      <Wand2 className="w-3.5 h-3.5" />
+                      <span>Nettoyer et Structurer</span>
+                    </button>
+                  )}
+                </div>
                 <textarea
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Le texte du cours s'affichera ici..."
-                  rows={4}
+                  placeholder="Le texte propre et reconstitué s'affichera ici..."
+                  rows={5}
                   className="w-full p-3 text-xs font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
                 <button
@@ -779,7 +832,7 @@ export default function App() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
                 >
                   <Sparkles className="w-5 h-5 text-amber-300" />
-                  <span>{isAnalyzing ? (ocrProgress || "Génération des exercices...") : "Générer les exercices & Lancer"}</span>
+                  <span>{isAnalyzing ? (ocrProgress || "Génération des exercices...") : "Générer les exercices & Lancer le Jeu"}</span>
                 </button>
               </div>
 
@@ -838,12 +891,12 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Flashcard (Recto = Définition complète, Verso = Mot clé) */}
+                {/* Flashcard (Recto = Définition, Verso = Mot clé) */}
                 {currentStep.type === 'flashcard' && (
                   <div className="space-y-6 text-center">
                     <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
                       <span>Carte Mémoire</span>
-                      <span>Recto (Définition) / Verso (Mot-clé)</span>
+                      <span>Recto (Définition complète) / Verso (Mot-clé)</span>
                     </div>
 
                     <div
@@ -853,7 +906,7 @@ export default function App() {
                       }`}
                     >
                       <span className="absolute top-4 left-4 text-xs font-medium text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-lg">
-                        {isCardFlipped ? 'Mot-clé / Concept (Verso)' : 'Définition à deviner (Recto)'}
+                        {isCardFlipped ? 'Mot-clé à trouver (Verso)' : 'Définition complète (Recto)'}
                       </span>
                       <button
                         onClick={(e) => {
@@ -867,7 +920,7 @@ export default function App() {
                       </button>
 
                       <div className="my-6 max-w-md">
-                        <h3 className={`font-bold transition-all ${isCardFlipped ? 'text-2xl text-indigo-900 font-bold' : 'text-base text-slate-800 font-medium'}`}>
+                        <h3 className={`transition-all ${isCardFlipped ? 'text-2xl text-indigo-900 font-bold' : 'text-base text-slate-800 font-medium leading-relaxed'}`}>
                           {isCardFlipped ? currentStep.data.back : currentStep.data.front}
                         </h3>
                       </div>
@@ -916,7 +969,7 @@ export default function App() {
                             disabled={selectedAnswer !== null}
                             className={`w-full p-4 rounded-xl border-2 text-left transition flex justify-between items-center ${btnStyle}`}
                           >
-                            <span className="text-sm">{option}</span>
+                            <span className="text-sm leading-relaxed">{option}</span>
                             {selectedAnswer !== null && idx === currentStep.data.correctAnswer && (
                               <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
                             )}
@@ -954,7 +1007,7 @@ export default function App() {
                     </div>
 
                     <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-                      <h3 className="text-lg font-medium text-slate-900">
+                      <h3 className="text-lg font-medium text-slate-900 leading-relaxed">
                         {currentStep.data.sentenceWithBlank}
                       </h3>
                     </div>
@@ -1029,7 +1082,7 @@ export default function App() {
                     className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition flex items-center space-x-2 shadow-sm"
                   >
                     <RotateCw className="w-4 h-4" />
-                    <span>Recommencer</span>
+                    <span>Recommencer avec d'autres questions</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('home')}
