@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   CheckCircle2, XCircle, AlertCircle, Timer, ChevronRight, ChevronLeft, 
   RefreshCw, Award, BookOpen, Sparkles, Upload, Home, Brain, 
-  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save, RotateCw, Wand2
+  Volume2, Camera, Folder, Trash2, Plus, Zap, Heart, Play, HelpCircle, Key, Cpu, Save, RotateCw, Wand2, Settings
 } from 'lucide-react';
 
 const STOP_WORDS = new Set([
@@ -49,7 +49,6 @@ function cleanAndStructureRawText(rawText) {
     if (!currentParagraph) {
       currentParagraph = line;
     } else {
-      // Si la ligne précédente ne se termine pas par un point ou deux-points, on recolle
       const lastChar = currentParagraph.slice(-1);
       if (['.', '!', '?', ':', ';'].includes(lastChar) || /^[•\-\*]/.test(line)) {
         cleanedLines.push(currentParagraph);
@@ -507,7 +506,6 @@ export default function App() {
     }
   };
 
-  // LANCEMENT MANUEL DE LA GÉNÉRATION AU CLIC SUR LE BOUTON
   const handleProcessText = async (textToProcess) => {
     setUploadError(null);
     const cleanedText = cleanAndStructureRawText(textToProcess);
@@ -712,9 +710,9 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.1</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.2</span></h1>
         </div>
-        <nav className="flex space-x-2">
+        <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
             <Home className="w-4 h-4" /> <span className="hidden md:inline">Accueil</span>
           </button>
@@ -723,6 +721,9 @@ export default function App() {
           </button>
           <button onClick={() => setActiveTab('decks')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'decks' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
             <Folder className="w-4 h-4" /> <span className="hidden md:inline">Mes Decks</span>
+          </button>
+          <button onClick={() => setActiveTab('settings')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'settings' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
+            <Settings className="w-4 h-4" /> <span className="hidden md:inline">Paramètres</span>
           </button>
         </nav>
       </header>
@@ -735,31 +736,6 @@ export default function App() {
               <div className="text-center">
                 <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Manuel</h2>
                 <p className="text-slate-600 text-sm mt-1">Importez votre cours, vérifiez le texte, puis lancez la génération à votre rythme.</p>
-              </div>
-
-              {/* CLÉ API */}
-              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 space-y-2">
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center space-x-2">
-                    <Cpu className="w-4 h-4 text-indigo-600" />
-                    <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Clé API (Optionnelle - Gemini / OpenAI)</span>
-                  </div>
-                  {isKeySavedSuccess && <span className="text-xs text-green-600 font-semibold flex items-center space-x-1"><CheckCircle2 className="w-3.5 h-3.5" /> <span>Clé enregistrée !</span></span>}
-                </div>
-
-                <div className="flex items-center space-x-2 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-inner">
-                  <Key className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => handleSaveApiKey(e.target.value)}
-                    placeholder="Collez votre clé Gemini (AIzaSy...) ou laissez vide (moteur local actif)"
-                    className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400 font-mono"
-                  />
-                  <button onClick={() => handleSaveApiKey(apiKey)} className="p-1 text-indigo-600 hover:text-indigo-800" title="Enregistrer">
-                    <Save className="w-4 h-4" />
-                  </button>
-                </div>
               </div>
 
               <div className="space-y-2">
@@ -1151,6 +1127,55 @@ export default function App() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* PARAMÈTRES (CONFIG CLÉ API) */}
+        {activeTab === 'settings' && (
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-bold text-slate-900 flex items-center space-x-2">
+                <Settings className="w-5 h-5 text-indigo-600" />
+                <span>Paramètres de l'application</span>
+              </h2>
+            </div>
+
+            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-5 rounded-2xl border border-indigo-100 space-y-3">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center space-x-2">
+                  <Cpu className="w-5 h-5 text-indigo-600" />
+                  <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Clé API (Optionnelle - Gemini / OpenAI)</span>
+                </div>
+                {isKeySavedSuccess && (
+                  <span className="text-xs text-green-600 font-semibold flex items-center space-x-1">
+                    <CheckCircle2 className="w-4 h-4" /> 
+                    <span>Clé enregistrée avec succès !</span>
+                  </span>
+                )}
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Configurez votre clé API externe (ex: Gemini <code>AIzaSy...</code> ou OpenAI) pour propulser l'analyse de cours par l'intelligence artificielle. Si vous laissez ce champ vide, c'est le moteur local intégré qui générera instantanément les quiz.
+              </p>
+
+              <div className="flex items-center space-x-2 bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-inner">
+                <Key className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => handleSaveApiKey(e.target.value)}
+                  placeholder="Collez votre clé API ici..."
+                  className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400 font-mono"
+                />
+                <button 
+                  onClick={() => handleSaveApiKey(apiKey)} 
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium flex items-center space-x-1 transition flex-shrink-0"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Enregistrer</span>
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </main>
