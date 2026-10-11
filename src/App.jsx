@@ -22,11 +22,13 @@ const speakText = (text) => {
   }
 };
 
-// --- NETTOYAGE ET RECONSTITUTION DES PHRASES MULTI-LIGNES ---
+// --- NETTOYAGE ET RECONSTITUTION DES PHRASES MULTI-LIGNES (COMPATIBLE MOBILE) ---
 function cleanAndStructureRawText(rawText) {
   if (!rawText) return '';
 
   let text = rawText
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
     .replace(/https?:\/\/\S+/gi, '')
     .replace(/www\.\S+/gi, '')
     .replace(/\b4H-Chap\.\d+:?\s*[^\n]*/gi, '')
@@ -65,7 +67,7 @@ function cleanAndStructureRawText(rawText) {
   return cleanedLines.join('\n\n');
 }
 
-// --- EXTRACTION EXHAUSTIVE DE TOUTES LES DÉFINITIONS ---
+// --- EXTRACTION ROBUSTE DES DÉFINITIONS (AVEC SECOURS MOBILE) ---
 function extractAllDefinitionsFromText(sourceText) {
   const cleanedText = cleanAndStructureRawText(sourceText);
   const paragraphs = cleanedText.split(/\n+/);
@@ -92,6 +94,23 @@ function extractAllDefinitionsFromText(sourceText) {
       }
     }
   });
+
+  // Sécurité mobile : si aucun format avec deux-points n'est trouvé, découpage intelligent par phrases
+  if (definitions.length === 0) {
+    const sentences = cleanedText.match(/[^.!?]+[.!?]+/g) || [];
+    sentences.forEach((sentence, idx) => {
+      const cleanS = sentence.trim();
+      if (cleanS.length > 20) {
+        const words = cleanS.split(' ');
+        const term = words.slice(0, 3).join(' ') + '...';
+        definitions.push({
+          term: `Concept ${idx + 1}`,
+          def: cleanS,
+          source: cleanS
+        });
+      }
+    });
+  }
 
   return definitions;
 }
@@ -307,7 +326,6 @@ export default function App() {
   const [newSubjectInput, setNewSubjectInput] = useState('');
   const [savedDecks, setSavedDecks] = useState([]);
 
-  // États pour la recherche et le filtre dans l'onglet Decks
   const [deckSearchQuery, setDeckSearchQuery] = useState('');
   const [deckFilterSubject, setDeckFilterSubject] = useState('Tous');
 
@@ -714,7 +732,6 @@ export default function App() {
     }
   };
 
-  // Filtrage des decks enregistrés
   const filteredDecks = savedDecks.filter((deck) => {
     const matchesSearch = deck.title.toLowerCase().includes(deckSearchQuery.toLowerCase());
     const matchesSubject = deckFilterSubject === 'Tous' || deck.subject === deckFilterSubject;
@@ -728,7 +745,7 @@ export default function App() {
       <header className="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
         <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
           <Brain className="w-8 h-8 text-amber-300" />
-          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.4</span></h1>
+          <h1 className="text-xl font-bold tracking-wide">StudySnap <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full ml-1">v5.5</span></h1>
         </div>
         <nav className="flex space-x-1 md:space-x-2">
           <button onClick={() => setActiveTab('home')} className={`px-3 py-1.5 rounded-lg flex items-center space-x-1 text-sm font-medium transition ${activeTab === 'home' ? 'bg-indigo-700' : 'hover:bg-indigo-500'}`}>
@@ -747,12 +764,11 @@ export default function App() {
       </header>
 
       <main className="max-w-3xl mx-auto p-4 md:p-6">
-        {/* ACCUEIL */}
         {activeTab === 'home' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
               <div className="text-center">
-                <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Manuel</h2>
+                <h2 className="text-2xl font-bold text-slate-900">Générateur Pédagogique Mobile & PC</h2>
                 <p className="text-slate-600 text-sm mt-1">Importez votre cours, vérifiez le texte, puis lancez la génération à votre rythme.</p>
               </div>
 
@@ -813,177 +829,162 @@ export default function App() {
               </div>
 
               <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Texte extrait & Reconstitué (Vérifiable)</label>
-                  {rawInputText.trim() && (
-                    <div className="flex items-center space-x-3">
-                      <button onClick={handleCleanTextButton} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center space-x-1 font-semibold">
-                        <Wand2 className="w-3.5 h-3.5" />
-                        <span>Nettoyer</span>
-                      </button>
-                      <button onClick={handleClearText} className="text-xs text-red-600 hover:text-red-800 flex items-center space-x-1 font-semibold">
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Effacer tout</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">3. Coller le texte du cours (optionnel)</label>
                 <textarea
+                  rows="6"
                   value={rawInputText}
                   onChange={(e) => setRawInputText(e.target.value)}
-                  placeholder="Le texte s'affichera ici après l'import. Vous pouvez le relire avant de générer le jeu..."
-                  rows={5}
-                  className="w-full p-3 text-xs font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                />
-                <button
-                  onClick={() => handleProcessText(rawInputText)}
-                  disabled={!rawInputText.trim() || isAnalyzing}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
-                >
-                  <Sparkles className="w-5 h-5 text-amber-300" />
-                  <span>{isAnalyzing ? (ocrProgress || "Génération en cours...") : "Générer les exercices & Lancer le Jeu"}</span>
-                </button>
-              </div>
-
-              {uploadError && (
-                <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  <span>{uploadError}</span>
+                  placeholder="Ou collez directement le contenu brut de votre leçon ici..."
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                ></textarea>
+                <div className="flex flex-wrap gap-2 justify-between items-center">
+                  <div className="flex space-x-2">
+                    <button onClick={handleCleanTextButton} className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-medium flex items-center space-x-1">
+                      <Wand2 className="w-3.5 h-3.5" /> <span>Nettoyer le texte</span>
+                    </button>
+                    <button onClick={handleClearText} className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg text-xs font-medium flex items-center space-x-1">
+                      <Trash2 className="w-3.5 h-3.5" /> <span>Effacer</span>
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => handleProcessText(rawInputText)}
+                    disabled={isAnalyzing || !rawInputText.trim()}
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl text-sm font-semibold flex items-center space-x-2 transition shadow-sm"
+                  >
+                    {isAnalyzing ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>{ocrProgress || "Analyse en cours..."}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4" />
+                        <span>Générer les exercices & Réviser</span>
+                      </>
+                    )}
+                  </button>
                 </div>
-              )}
+                {uploadError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs flex items-center space-x-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <span>{uploadError}</span>
+                  </div>
+                )}
+              </div>
             </div>
+
+            {history.length > 0 && (
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
+                <h3 className="text-lg font-bold text-slate-900 flex items-center space-x-2">
+                  <Award className="w-5 h-5 text-amber-500" />
+                  <span>Historique des sessions</span>
+                </h3>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {history.map((item, index) => (
+                    <div key={index} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl text-sm">
+                      <div>
+                        <span className="font-semibold text-slate-800">{item.subject}</span>
+                        <span className="text-xs text-slate-500 ml-2">{item.date}</span>
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        <span className="text-xs px-2 py-1 bg-indigo-100 text-indigo-700 font-semibold rounded-lg">{item.score} pts</span>
+                        <span className={`text-xs font-bold ${item.percentage >= 70 ? 'text-green-600' : 'text-amber-600'}`}>{item.percentage}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* PARCOURS GAMIFIÉ */}
         {activeTab === 'session' && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
+          <div className="space-y-4">
             {!isSessionFinished && currentStep ? (
-              <div>
-                <div className="space-y-3 mb-6">
-                  <div className="flex justify-between items-center text-sm font-semibold">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-indigo-600 font-bold">Étape {currentStepIdx + 1} / {sessionSteps.length}</span>
-                      {combo > 1 && (
-                        <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full font-semibold flex items-center space-x-0.5">
-                          <Zap className="w-3 h-3" />
-                          <span>Combo x{combo}</span>
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center space-x-4">
-                      <div className="flex space-x-1 text-red-500">
-                        {Array.from({ length: 3 }).map((_, i) => (
-                          <Heart
-                            key={i}
-                            className={`w-4 h-4 ${i < lives ? 'fill-current text-red-500' : 'text-slate-200'}`}
-                          />
-                        ))}
-                      </div>
-                      <div className="text-sm font-semibold text-slate-700">
-                        Score: <span className="text-indigo-600">{score}</span>
-                      </div>
-                      {currentStep.type !== 'flashcard' && (
-                        <div className={`flex items-center space-x-1 text-xs font-bold ${timeLeft <= 5 ? 'text-red-600 animate-pulse' : 'text-slate-600'}`}>
-                          <Timer className="w-4 h-4" />
-                          <span>{timeLeft}s</span>
-                        </div>
-                      )}
-                    </div>
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-bold uppercase tracking-wider bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg">
+                      Étape {currentStepIdx + 1} / {sessionSteps.length}
+                    </span>
+                    <span className="text-xs font-semibold text-slate-500">Combo : x{combo}</span>
                   </div>
-                  
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                    <div
-                      className="bg-indigo-600 h-full transition-all duration-300"
-                      style={{ width: `${((currentStepIdx + 1) / sessionSteps.length) * 100}%` }}
-                    />
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-1 text-rose-500 font-bold text-sm">
+                      <Heart className="w-4 h-4 fill-current" />
+                      <span>{lives}</span>
+                    </div>
+                    {currentStep.type !== 'flashcard' && (
+                      <div className={`flex items-center space-x-1 text-sm font-bold ${timeLeft <= 5 ? 'text-rose-600 animate-pulse' : 'text-slate-600'}`}>
+                        <Timer className="w-4 h-4" />
+                        <span>{timeLeft}s</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Flashcard */}
                 {currentStep.type === 'flashcard' && (
-                  <div className="space-y-6 text-center">
-                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                      <span>Carte Mémoire</span>
-                      <span>Recto (Définition complète) / Verso (Mot-clé)</span>
-                    </div>
-
+                  <div className="space-y-4">
                     <div
                       onClick={() => setIsCardFlipped(!isCardFlipped)}
-                      className={`w-full min-h-[220px] p-6 rounded-2xl border-2 cursor-pointer transition-all duration-300 flex flex-col items-center justify-center relative shadow-sm ${
-                        isCardFlipped ? 'bg-indigo-50 border-indigo-300' : 'bg-white border-slate-200 hover:border-slate-300'
-                      }`}
+                      className="w-full min-h-[220px] p-6 bg-gradient-to-br from-indigo-500 to-indigo-700 text-white rounded-2xl shadow-md flex flex-col justify-between cursor-pointer transition transform hover:scale-[1.01]"
                     >
-                      <span className="absolute top-4 left-4 text-xs font-medium text-indigo-500 bg-indigo-50 px-2.5 py-1 rounded-lg">
-                        {isCardFlipped ? 'Mot-clé à trouver (Verso)' : 'Définition complète (Recto)'}
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          speakText(isCardFlipped ? currentStep.data.back : currentStep.data.front);
-                        }}
-                        className="absolute top-4 right-4 p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition"
-                        title="Écouter"
-                      >
-                        <Volume2 className="w-4 h-4" />
-                      </button>
-
-                      <div className="my-6 max-w-md">
-                        <h3 className={`transition-all ${isCardFlipped ? 'text-2xl text-indigo-900 font-bold' : 'text-base text-slate-800 font-medium leading-relaxed'}`}>
-                          {isCardFlipped ? currentStep.data.back : currentStep.data.front}
-                        </h3>
+                      <div className="flex justify-between items-center text-indigo-200 text-xs font-semibold">
+                        <span>CARTE MÉMOIRE</span>
+                        <button onClick={(e) => { e.stopPropagation(); speakText(isCardFlipped ? currentStep.data.back : currentStep.data.front); }} className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg">
+                          <Volume2 className="w-4 h-4 text-white" />
+                        </button>
                       </div>
-
-                      <p className="text-xs text-slate-400 italic">Cliquez sur la carte pour révéler la réponse</p>
+                      <div className="text-center my-auto py-4">
+                        <p className="text-lg md:text-xl font-medium">
+                          {isCardFlipped ? currentStep.data.back : currentStep.data.front}
+                        </p>
+                      </div>
+                      <div className="text-center text-xs text-indigo-200">
+                        {isCardFlipped ? "Cliquez pour voir la définition" : "Cliquez pour révéler le concept"}
+                      </div>
                     </div>
-
                     <button
                       onClick={advanceToNextStep}
-                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition shadow-sm flex items-center justify-center space-x-2"
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold text-sm transition shadow-sm"
                     >
-                      <span>Carte suivante</span>
-                      <ChevronRight className="w-4 h-4" />
+                      Carte suivante <ChevronRight className="w-4 h-4 inline ml-1" />
                     </button>
                   </div>
                 )}
 
-                {/* Quiz QCM */}
                 {currentStep.type === 'quiz' && (
-                  <div className="space-y-6">
-                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                      <span>Question du Cours</span>
-                    </div>
-
-                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-start">
                       <h3 className="text-lg font-bold text-slate-900">{currentStep.data.question}</h3>
+                      <button onClick={() => speakText(currentStep.data.question)} className="p-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600">
+                        <Volume2 className="w-4 h-4" />
+                      </button>
                     </div>
 
-                    <div className="space-y-3">
-                      {currentStep.data.options.map((option, idx) => {
-                        let btnStyle = "bg-white border-slate-200 text-slate-800 hover:border-indigo-400";
+                    <div className="grid grid-cols-1 gap-2.5">
+                      {currentStep.data.options.map((opt, idx) => {
+                        let btnStyle = "bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800";
                         if (selectedAnswer !== null) {
                           if (idx === currentStep.data.correctAnswer) {
-                            btnStyle = "bg-green-50 border-green-500 text-green-900 font-semibold";
+                            btnStyle = "bg-green-50 border-green-300 text-green-800 font-semibold";
                           } else if (idx === selectedAnswer) {
-                            btnStyle = "bg-red-50 border-red-500 text-red-900";
-                          } else {
-                            btnStyle = "opacity-50 bg-white border-slate-200 text-slate-500";
+                            btnStyle = "bg-rose-50 border-rose-300 text-rose-800";
                           }
                         }
-
                         return (
                           <button
                             key={idx}
                             onClick={() => handleAnswerSelect(idx)}
                             disabled={selectedAnswer !== null}
-                            className={`w-full p-4 rounded-xl border-2 text-left transition flex justify-between items-center ${btnStyle}`}
+                            className={`p-3.5 border rounded-xl text-left text-sm transition flex justify-between items-center ${btnStyle}`}
                           >
-                            <span className="text-sm leading-relaxed">{option}</span>
+                            <span>{opt}</span>
                             {selectedAnswer !== null && idx === currentStep.data.correctAnswer && (
-                              <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
+                              <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 ml-2" />
                             )}
                             {selectedAnswer !== null && idx === selectedAnswer && idx !== currentStep.data.correctAnswer && (
-                              <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                              <XCircle className="w-5 h-5 text-rose-600 flex-shrink-0 ml-2" />
                             )}
                           </button>
                         );
@@ -991,16 +992,16 @@ export default function App() {
                     </div>
 
                     {stepResultState !== null && (
-                      <div className="space-y-4 pt-2 animate-fade-in">
-                        <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-                          <p className="font-semibold mb-1">{stepResultState === 'correct' ? '✨ Bonne réponse !' : '❌ Pas tout à fait.'}</p>
-                          <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
+                      <div className="space-y-3 pt-2">
+                        <div className={`p-4 rounded-xl text-sm ${stepResultState === 'correct' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-rose-50 text-rose-800 border border-rose-200'}`}>
+                          <p className="font-semibold">{stepResultState === 'correct' ? "Bonne réponse !" : "Mauvaise réponse."}</p>
+                          <p className="mt-1 text-xs">{currentStep.data.explanation}</p>
                         </div>
                         <button
                           onClick={advanceToNextStep}
-                          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
+                          className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold text-sm transition shadow-sm flex items-center justify-center space-x-1"
                         >
-                          <span>Étape suivante</span>
+                          <span>Continuer</span>
                           <ChevronRight className="w-4 h-4" />
                         </button>
                       </div>
@@ -1008,96 +1009,69 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Texte à trous */}
                 {currentStep.type === 'fillblank' && (
-                  <div className="space-y-6">
-                    <div className="flex justify-between items-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                      <span>Texte à Trous</span>
-                    </div>
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Complétez la phrase</h3>
+                    <p className="text-lg font-medium text-slate-900 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                      {currentStep.data.sentenceWithBlank}
+                    </p>
 
-                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
-                      <h3 className="text-lg font-medium text-slate-900 leading-relaxed">
-                        {currentStep.data.sentenceWithBlank}
-                      </h3>
-                    </div>
-
-                    <div className="space-y-3">
+                    <div className="flex space-x-2">
                       <input
                         type="text"
                         value={userBlankInput}
                         onChange={(e) => setUserBlankInput(e.target.value)}
                         disabled={stepResultState !== null}
-                        placeholder="Écrivez le mot manquant..."
-                        className="w-full p-4 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && stepResultState === null) {
-                            handleCheckFillBlank();
-                          }
-                        }}
+                        placeholder="Votre réponse..."
+                        className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        onKeyDown={(e) => e.key === 'Enter' && handleCheckFillBlank()}
                       />
-                      {stepResultState === null ? (
-                        <button
-                          onClick={handleCheckFillBlank}
-                          disabled={!userBlankInput.trim()}
-                          className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition shadow-sm"
-                        >
-                          Vérifier
-                        </button>
-                      ) : (
-                        <div className="space-y-4 animate-fade-in">
-                          <div className={`p-4 rounded-xl border text-sm ${stepResultState === 'correct' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-                            <p className="font-semibold mb-1">
-                              {stepResultState === 'correct' ? '✨ C\'est exact !' : `❌ Le mot attendu était : "${currentStep.data.missingWord}"`}
-                            </p>
-                            <p className="text-xs text-slate-600 mt-1">{currentStep.data.explanation}</p>
-                          </div>
-                          <button
-                            onClick={advanceToNextStep}
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition flex items-center justify-center space-x-2 shadow-sm"
-                          >
-                            <span>Étape suivante</span>
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
-                        </div>
-                      )}
+                      <button
+                        onClick={handleCheckFillBlank}
+                        disabled={stepResultState !== null || !userBlankInput.trim()}
+                        className="px-5 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl font-semibold text-sm transition"
+                      >
+                        Valider
+                      </button>
                     </div>
+
+                    {stepResultState !== null && (
+                      <div className="space-y-3 pt-2">
+                        <div className={`p-4 rounded-xl text-sm ${stepResultState === 'correct' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-rose-50 text-rose-800 border border-rose-200'}`}>
+                          <p className="font-semibold">{stepResultState === 'correct' ? "Excellente réponse !" : `Incorrect. Le mot attendu était : ${currentStep.data.missingWord}`}</p>
+                          <p className="mt-1 text-xs">{currentStep.data.explanation}</p>
+                        </div>
+                        <button
+                          onClick={advanceToNextStep}
+                          className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold text-sm transition shadow-sm flex items-center justify-center space-x-1"
+                        >
+                          <span>Continuer</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
             ) : (
-              <div className="text-center space-y-6 py-8">
-                <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto text-amber-600">
-                  <Award className="w-10 h-10" />
+              <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 text-center space-y-6">
+                <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto">
+                  <Award className="w-8 h-8" />
                 </div>
                 <div className="space-y-2">
-                  <h2 className="text-2xl font-bold text-slate-900">Session Terminée ! 🎉</h2>
-                  <p className="text-sm text-slate-600">Bravo pour tes efforts de révision !</p>
+                  <h3 className="text-2xl font-bold text-slate-900">Session Terminée !</h3>
+                  <p className="text-slate-600 text-sm">Vous avez complété tous les exercices de cette session.</p>
                 </div>
-
-                <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-sm mx-auto space-y-3">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-600">Score final :</span>
-                    <span className="font-bold text-indigo-600">{score} pts</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-600">Matière :</span>
-                    <span className="font-bold text-slate-800">{selectedSubject}</span>
-                  </div>
+                <div className="inline-block bg-indigo-50 border border-indigo-100 px-6 py-4 rounded-2xl">
+                  <span className="text-xs font-semibold text-indigo-600 uppercase tracking-wider block">Score Final</span>
+                  <span className="text-3xl font-extrabold text-indigo-700">{score} pts</span>
                 </div>
-
-                <div className="flex justify-center space-x-3">
-                  <button
-                    onClick={() => startSession()}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition flex items-center space-x-2 shadow-sm"
-                  >
-                    <RotateCw className="w-4 h-4" />
-                    <span>Recommencer avec d'autres questions</span>
+                <div className="flex justify-center space-x-3 pt-2">
+                  <button onClick={() => startSession()} className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition">
+                    Recommencer
                   </button>
-                  <button
-                    onClick={() => setActiveTab('home')}
-                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-6 py-3 rounded-xl text-sm font-medium transition"
-                  >
-                    Accueil
+                  <button onClick={() => setActiveTab('decks')} className="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl text-sm font-semibold transition">
+                    Voir mes Decks
                   </button>
                 </div>
               </div>
@@ -1105,123 +1079,86 @@ export default function App() {
           </div>
         )}
 
-        {/* MES DECKS */}
         {activeTab === 'decks' && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-bold text-slate-900">Mes Decks de Cours Enregistrés</h2>
-              <span className="text-xs bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg font-semibold">
-                {filteredDecks.length} / {savedDecks.length} deck(s)
-              </span>
-            </div>
-
-            {/* Barre de recherche et filtre par matière */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={deckSearchQuery}
-                  onChange={(e) => setDeckSearchQuery(e.target.value)}
-                  placeholder="Rechercher un deck par titre..."
-                  className="w-full p-2.5 pl-9 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                />
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+          <div className="space-y-4">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
+              <h3 className="text-xl font-bold text-slate-900">Mes Decks de Cours Enregistrés</h3>
+              
+              <div className="flex flex-col md:flex-row gap-3">
+                <div className="flex-1 relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
+                  <input
+                    type="text"
+                    value={deckSearchQuery}
+                    onChange={(e) => setDeckSearchQuery(e.target.value)}
+                    placeholder="Rechercher un deck..."
+                    className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <select
+                  value={deckFilterSubject}
+                  onChange={(e) => setDeckFilterSubject(e.target.value)}
+                  className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="Tous">Toutes les matières</option>
+                  {subjectList.map((subj, idx) => (
+                    <option key={idx} value={subj}>{subj}</option>
+                  ))}
+                </select>
               </div>
-              <select
-                value={deckFilterSubject}
-                onChange={(e) => setDeckFilterSubject(e.target.value)}
-                className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="Tous">Toutes les matières</option>
-                {subjectList.map((subj, idx) => (
-                  <option key={idx} value={subj}>{subj}</option>
-                ))}
-              </select>
-            </div>
 
-            {filteredDecks.length === 0 ? (
-              <div className="text-center py-12 text-slate-400 space-y-2">
-                <Folder className="w-12 h-12 mx-auto opacity-40" />
-                <p className="text-sm">Aucun deck trouvé avec ces critères.</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {filteredDecks.map((deck) => (
-                  <div key={deck.id} className="p-4 rounded-xl border border-slate-200 hover:border-indigo-300 transition flex justify-between items-center bg-slate-50/50">
-                    <div className="space-y-1">
-                      <div className="flex items-center space-x-2">
-                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-medium">{deck.subject}</span>
-                        <span className="text-xs text-slate-400">{deck.date}</span>
+              {filteredDecks.length > 0 ? (
+                <div className="space-y-3">
+                  {filteredDecks.map((deck) => (
+                    <div key={deck.id} className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex justify-between items-center transition hover:border-indigo-300">
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-xs font-semibold px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-md">{deck.subject}</span>
+                          <span className="text-xs text-slate-500">{deck.date}</span>
+                        </div>
+                        <h4 className="font-bold text-slate-800 text-sm">{deck.title}</h4>
                       </div>
-                      <h3 className="text-sm font-bold text-slate-800">{deck.title}</h3>
+                      <div className="flex items-center space-x-2">
+                        <button onClick={() => handleLoadDeck(deck)} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1">
+                          <Play className="w-3.5 h-3.5" /> <span>Réviser</span>
+                        </button>
+                        <button onClick={() => handleDeleteDeck(deck.id)} className="p-1.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded-lg">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => handleLoadDeck(deck)}
-                        className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-medium flex items-center space-x-1"
-                        title="Lancer"
-                      >
-                        <Play className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteDeck(deck.id)}
-                        className="p-2 bg-slate-200 hover:bg-red-100 text-slate-600 hover:text-red-600 rounded-xl transition"
-                        title="Supprimer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              ) : (
+                <p className="text-slate-500 text-sm text-center py-8">Aucun deck trouvé.</p>
+              )}
+            </div>
           </div>
         )}
 
-        {/* PARAMÈTRES (CONFIG CLÉ API) */}
         {activeTab === 'settings' && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-bold text-slate-900 flex items-center space-x-2">
-                <Settings className="w-5 h-5 text-indigo-600" />
-                <span>Paramètres de l'application</span>
-              </h2>
-            </div>
+          <div className="space-y-4">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 space-y-4">
+              <h3 className="text-xl font-bold text-slate-900">Paramètres & Clé API IA</h3>
+              <p className="text-slate-600 text-sm">Configurez votre clé API Gemini ou OpenAI pour une génération IA avancée, ou laissez vide pour utiliser le moteur local par défaut.</p>
 
-            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-5 rounded-2xl border border-indigo-100 space-y-3">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center space-x-2">
-                  <Cpu className="w-5 h-5 text-indigo-600" />
-                  <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Clé API (Optionnelle - Gemini / OpenAI)</span>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Clé API (Gemini / OpenAI)</label>
+                <div className="flex space-x-2">
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="AIzaSy... ou sk-..."
+                    className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  />
+                  <button onClick={() => handleSaveApiKey(apiKey)} className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold flex items-center space-x-1">
+                    <Save className="w-4 h-4" /> <span>Enregistrer</span>
+                  </button>
                 </div>
                 {isKeySavedSuccess && (
-                  <span className="text-xs text-green-600 font-semibold flex items-center space-x-1">
-                    <CheckCircle2 className="w-4 h-4" /> 
-                    <span>Clé enregistrée avec succès !</span>
-                  </span>
+                  <p className="text-xs text-green-600 font-semibold">Clé API enregistrée avec succès !</p>
                 )}
-              </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Configurez votre clé API externe (ex: Gemini <code>AIzaSy...</code> ou OpenAI) pour propulser l'analyse de cours par l'intelligence artificielle. Si vous laissez ce champ vide, c'est le moteur local intégré qui générera instantanément les quiz.
-              </p>
-
-              <div className="flex items-center space-x-2 bg-white px-3 py-2.5 rounded-xl border border-slate-200 shadow-inner">
-                <Key className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => handleSaveApiKey(e.target.value)}
-                  placeholder="Collez votre clé API ici..."
-                  className="w-full text-xs bg-transparent border-none focus:outline-none text-slate-800 placeholder-slate-400 font-mono"
-                />
-                <button 
-                  onClick={() => handleSaveApiKey(apiKey)} 
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium flex items-center space-x-1 transition flex-shrink-0"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Enregistrer</span>
-                </button>
               </div>
             </div>
           </div>
